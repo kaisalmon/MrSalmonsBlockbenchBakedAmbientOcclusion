@@ -1,0 +1,9 @@
+{
+  "name": "blockbench-baked-ao",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "devDependencies": {
+    "blockbench-types": "^4.12.2"
+  }
+}
