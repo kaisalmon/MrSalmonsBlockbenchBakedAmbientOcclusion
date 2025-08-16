@@ -101,6 +101,17 @@ async function processMeshFaces(mesh, hasSelectedFaces, callback) {
     const faces = [];
     mesh.forAllFaces(face => faces.push(face));
     const cache = {}; 
+    const [lowestY, highestY] = getHighestAndLowestY(mesh);
+    const groundPlane = new THREE.Mesh(
+        new THREE.PlaneGeometry(1000, 1000),
+        new THREE.MeshBasicMaterial({color: 0x000000, side: THREE.FrontSide, transparent: true, opacity: 0.5})
+    );
+
+    groundPlane.rotation.set(-Math.PI / 2, 0, 0); // Rotate to be horizontal
+    groundPlane.position.setY(lowestY - 1);
+    groundPlane.updateMatrix();
+    groundPlane.updateWorldMatrix()
+
     for (const face of faces) {
         const tex = face.getTexture();
         if(!tex){
@@ -111,7 +122,7 @@ async function processMeshFaces(mesh, hasSelectedFaces, callback) {
         if(hasSelectedFaces && !face.isSelected()) continue;
         
         anyWithTextures = true;
-        const pixelsProcessed = await processFaceTexture(tex, face, mesh, cache);
+        const pixelsProcessed = await processFaceTexture(tex, face, mesh, cache, groundPlane);
         totalPixelsProcessed += pixelsProcessed;
     }
     
@@ -125,7 +136,7 @@ async function processMeshFaces(mesh, hasSelectedFaces, callback) {
  * @param {Mesh} mesh - The mesh containing the face
  * @returns {Promise<number>} - Number of pixels processed
  */
-async function processFaceTexture(tex, face, mesh, cache) {
+async function processFaceTexture(tex, face, mesh, cache, groundPlane) {
     return new Promise((resolve) => {
         tex.edit(async (htmlCanvasElement) => {
     
@@ -148,7 +159,6 @@ async function processFaceTexture(tex, face, mesh, cache) {
             
             // Process pixels in batches
             const getKey = (u, v) => `${u},${v}`;
-            const batchSize = 256;
             // Process this batch
             for (const [u, v] of pixelCoords) {
                 const key = getKey(u, v);
@@ -157,7 +167,7 @@ async function processFaceTexture(tex, face, mesh, cache) {
                 }
                 // Get x,y,z in 3d space of the face at this u,v
                 const {x, y, z} = face.UVToLocal([u + 0.5, v + 0.5]);
-                const [r, g, b, a] = calculateAmbientOcclusion([x, y, z], [u, v], face, mesh);
+                const [r, g, b, a] = calculateAmbientOcclusion([x, y, z], [u, v], face, mesh, groundPlane);
                 ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${a})`;
                 ctx.fillRect(u, v, 1, 1);
                 processedPixels++;
@@ -177,7 +187,7 @@ async function processFaceTexture(tex, face, mesh, cache) {
  * @param {Mesh} mesh - The mesh containing the face
  * @returns {number[]} - RGB values [r,g,b] for the ambient occlusion
  */
-function calculateAmbientOcclusion(position, uv, face, mesh) {
+function calculateAmbientOcclusion(position, uv, face, mesh, groundPlane) {
     const [x, y, z] = position;
     const [u, v] = uv;
     const [normalX, normalY, normalZ] = face.getNormal(true);
@@ -190,7 +200,7 @@ function calculateAmbientOcclusion(position, uv, face, mesh) {
     let normal = new THREE.Vector3(normalX, normalY, normalZ);
     // const normal = new THREE.Vector3(0,1,0); // Use a fixed normal for testing
     let occlusion = 0;
-    const length = 4;
+    const length = 8;
     const rayCount = SAMPLES;
     
     for(let i = 0; i < rayCount; i++) {
@@ -207,7 +217,7 @@ function calculateAmbientOcclusion(position, uv, face, mesh) {
         // const direction = normal.clone().multiplyScalar(-1); 
 
         const ray = new THREE.Raycaster(origin, direction, 0.001, length);
-        const intersects = ray.intersectObjects([mesh.mesh]);
+        const intersects = ray.intersectObjects([mesh.mesh, groundPlane]);
         
         if(intersects.length === 0) {
             continue; // No intersection, continue to next random direction
@@ -250,4 +260,26 @@ function calculateAmbientOcclusion(position, uv, face, mesh) {
 
 function lerp(a,b,t){
     return a*(1-t) + b*t;
+}
+
+/**
+ * Get the highest and lowest Y coordinates of all vertices in a mesh
+ * @param {Mesh} mesh - The mesh to analyze
+ * @returns {number[]} - [highestY, lowestY]
+ */
+function getHighestAndLowestY(mesh) {
+    const {mesh: {geometry}} = mesh;
+    if (!geometry || !geometry.attributes || !geometry.attributes.position) {
+        console.log(geometry)
+        throw new Error('Mesh does not have valid geometry attributes');
+    }
+   const positionAttribute = geometry.attributes.position;
+    let highestY = -Infinity;
+    let lowestY = Infinity;
+    for (let i = 0; i < positionAttribute.count; i++) {
+        const y = positionAttribute.getY(i);
+        if (y > highestY) highestY = y;
+        if (y < lowestY) lowestY = y;
+    }
+    return [lowestY, highestY];
 }
