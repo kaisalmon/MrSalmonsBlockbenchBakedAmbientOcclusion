@@ -147,23 +147,29 @@ async function processMeshFaces(mesh: Mesh, hasSelectedFaces: boolean, callback:
     groundPlane.updateWorldMatrix(false, false);
 
     const geometry: THREE.BufferGeometry = (mesh.mesh as THREE.Mesh).geometry;
-    const bvh: MeshBVH = new MeshBVH(geometry);
-
-    for (const face of faces) {
-        const tex: Texture | undefined = face.getTexture();
-        if (!tex) {
-            anyMissing = true;
-            continue;
+    const geometryBackup = geometry.clone(); // Backup as BVH mutates the geometry in a way that causes bugs in Blockbench
+    const bvh: MeshBVH = new MeshBVH(geometry, {
+        indirect: true,
+    });
+    try{
+        for (const face of faces) {
+            const tex: Texture | undefined = face.getTexture();
+            if (!tex) {
+                anyMissing = true;
+                continue;
+            }
+            
+            if (hasSelectedFaces && !face.isSelected()) continue;
+            
+            anyWithTextures = true;
+            const pixelsProcessed: number = await processFaceTexture(tex, face, mesh, cache, groundPlane, bvh);
+            totalPixelsProcessed += pixelsProcessed;
         }
         
-        if (hasSelectedFaces && !face.isSelected()) continue;
-        
-        anyWithTextures = true;
-        const pixelsProcessed: number = await processFaceTexture(tex, face, mesh, cache, groundPlane, bvh);
-        totalPixelsProcessed += pixelsProcessed;
+        callback(anyMissing, anyWithTextures, totalPixelsProcessed);
+    }finally {
+        (mesh.mesh as THREE.Mesh).geometry = geometryBackup;
     }
-    
-    callback(anyMissing, anyWithTextures, totalPixelsProcessed);
 }
 
 /**
@@ -261,9 +267,9 @@ function calculateAmbientOcclusion(
         // Reuse origin vector
         vectorPool.origin.set(x, y, z)
             .addScaledVector(vectorPool.normal, 0.5);
-        vectorPool.origin.x += (Math.random() - 0.5);
-        vectorPool.origin.y += (Math.random() - 0.5);
-        vectorPool.origin.z += (Math.random() - 0.5);
+        vectorPool.origin.x += (Math.random() - 0.5) * 0.5
+        vectorPool.origin.y += (Math.random() - 0.5) * 0.5;
+        vectorPool.origin.z += (Math.random() - 0.5) * 0.5;
         
         // Reuse direction vector
         vectorPool.direction.set(
@@ -272,12 +278,9 @@ function calculateAmbientOcclusion(
             (Math.random() - 0.5) * 2
         ).normalize();
         const raycaster: THREE.Raycaster = new THREE.Raycaster(vectorPool.origin, vectorPool.direction, 0.001, length);
-        // const intersects: THREE.Intersection[] = ray.intersectObjects([mesh.mesh, groundPlane]);
         
         const invMat: THREE.Matrix4 =  (mesh.mesh as THREE.Mesh).matrixWorld.clone().invert();
 
-        // raycasting
-        // ensure the ray is in the local space of the geometry being cast against
         raycaster.ray.applyMatrix4( invMat );
         const hit = bvh.raycastFirst( raycaster.ray );
         if (hit) {
