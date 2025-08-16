@@ -47,6 +47,8 @@ Plugin.register('blockbench-baked-ao', {
                     text: 'Starting ambient occlusion baking...',
                 });
                 
+                performance.mark("startAO");
+
                 for (const mesh of Mesh.selected) {
                     let hasSelectedFaces = false;
                     mesh.forAllFaces(face => {
@@ -62,7 +64,9 @@ Plugin.register('blockbench-baked-ao', {
                         pixelCount += processedPixels;
                     });
                 }
-                
+                performance.mark("endAO");
+                const measure = performance.measure("AO Processing Time", "startAO", "endAO");
+                console.log(`AO Processing Time: ${measure.duration}ms`);
                 if(!anyWithTextures) {
                     Blockbench.showToastNotification({
                         text: 'No textures found on selected meshes',
@@ -178,7 +182,11 @@ async function processFaceTexture(tex, face, mesh, cache, groundPlane) {
         });
     });
 }
-
+const vectorPool = {
+    origin: new THREE.Vector3(),
+    direction: new THREE.Vector3(),
+    normal: new THREE.Vector3()
+};
 /**
  * Calculates ambient occlusion at a specific point on a mesh face
  * @param {number[]} position - The [x,y,z] position in 3D space
@@ -188,42 +196,37 @@ async function processFaceTexture(tex, face, mesh, cache, groundPlane) {
  * @returns {number[]} - RGB values [r,g,b] for the ambient occlusion
  */
 function calculateAmbientOcclusion(position, uv, face, mesh, groundPlane) {
-    const [x, y, z] = position;
-    const [u, v] = uv;
+      const [x, y, z] = position;
     const [normalX, normalY, normalZ] = face.getNormal(true);
-    // return [
-    //  (normalX + 1) / 2 * 255, // Convert normal to RGB range
-    //  (normalY + 1) / 2 * 255,
-    // (normalZ + 1) / 2 * 255,
-    // 1
-    // ]
-    let normal = new THREE.Vector3(normalX, normalY, normalZ);
-    // const normal = new THREE.Vector3(0,1,0); // Use a fixed normal for testing
+    
+    // Reuse pooled vectors
+    vectorPool.normal.set(normalX, normalY, normalZ);
+    
     let occlusion = 0;
     const length = 8;
     const rayCount = SAMPLES;
     
     for(let i = 0; i < rayCount; i++) {
-        const origin = new THREE.Vector3(x, y, z)
-            .addScaledVector(normal, 0.5); // Start slightly offset from the face
-        origin.x += (Math.random() - 0.5)
-        origin.y += (Math.random() - 0.5) 
-        origin.z += (Math.random() - 0.5) 
-        const direction = new THREE.Vector3(
-            (Math.random() - 0.5) * 2, // Random direction in x
-            (Math.random() - 0.5) * 2, // Random direction in y
-            (Math.random() - 0.5) * 2  // Random direction in z
-        ).normalize(); 
-        // const direction = normal.clone().multiplyScalar(-1); 
+        // Reuse origin vector
+        vectorPool.origin.set(x, y, z)
+            .addScaledVector(vectorPool.normal, 0.5);
+        vectorPool.origin.x += (Math.random() - 0.5);
+        vectorPool.origin.y += (Math.random() - 0.5);
+        vectorPool.origin.z += (Math.random() - 0.5);
+        
+        // Reuse direction vector
+        vectorPool.direction.set(
+            (Math.random() - 0.5) * 2,
+            (Math.random() - 0.5) * 2,
+            (Math.random() - 0.5) * 2
+        ).normalize();
 
-        const ray = new THREE.Raycaster(origin, direction, 0.001, length);
+        const ray = new THREE.Raycaster(vectorPool.origin, vectorPool.direction, 0.001, length);
         const intersects = ray.intersectObjects([mesh.mesh, groundPlane]);
         
-        if(intersects.length === 0) {
-            continue; // No intersection, continue to next random direction
+        if(intersects.length > 0) {
+            occlusion += 1;
         }
-    
-        occlusion += 1; // Increment occlusion count
     }
     // if (occlusion === 0) {
     //     return [255, 0, 0, 1]; // No occlusion detected, return white
