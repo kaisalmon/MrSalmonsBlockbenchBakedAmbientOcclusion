@@ -12,7 +12,8 @@
     "rootDir": "src",
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true,
-    "lib": ["ES2020", "DOM"]
+    "lib": ["ES2020", "DOM"],
+    "types": ["blockbench-types"]
   },
   "include": [
     "src/**/*"

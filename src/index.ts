@@ -1,3 +1,8 @@
+import {
+	MeshBVH,
+} from 'three-mesh-bvh';
+
+declare const THREE: typeof import('three');
 interface Color {
     r: number;
     g: number;
@@ -141,6 +146,9 @@ async function processMeshFaces(mesh: Mesh, hasSelectedFaces: boolean, callback:
     groundPlane.updateMatrix();
     groundPlane.updateWorldMatrix(false, false);
 
+    const geometry: THREE.BufferGeometry = (mesh.mesh as THREE.Mesh).geometry;
+    const bvh: MeshBVH = new MeshBVH(geometry);
+
     for (const face of faces) {
         const tex: Texture | undefined = face.getTexture();
         if (!tex) {
@@ -151,7 +159,7 @@ async function processMeshFaces(mesh: Mesh, hasSelectedFaces: boolean, callback:
         if (hasSelectedFaces && !face.isSelected()) continue;
         
         anyWithTextures = true;
-        const pixelsProcessed: number = await processFaceTexture(tex, face, mesh, cache, groundPlane);
+        const pixelsProcessed: number = await processFaceTexture(tex, face, mesh, cache, groundPlane, bvh);
         totalPixelsProcessed += pixelsProcessed;
     }
     
@@ -172,7 +180,8 @@ async function processFaceTexture(
     face: MeshFace, 
     mesh: Mesh, 
     cache: Record<string, boolean>, 
-    groundPlane: THREE.Mesh
+    groundPlane: THREE.Mesh,
+    bvh: MeshBVH,
 ): Promise<number> {
     await new Promise(resolve => setTimeout(resolve, 0));
     let processedPixels: number = 0;
@@ -203,8 +212,8 @@ async function processFaceTexture(
             
             // Get x,y,z in 3d space of the face at this u,v
             const {x, y, z} = face.UVToLocal([u + 0.5, v + 0.5]);
-            const [r, g, b, a]: [number, number, number, number] = calculateAmbientOcclusion([x, y, z], [u, v], face, mesh, groundPlane);
-            
+            const [r, g, b, a]: [number, number, number, number] = calculateAmbientOcclusion([x, y, z], [u, v], face, mesh, groundPlane, bvh);
+
             ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${a})`;
             ctx.fillRect(u, v, 1, 1);
             processedPixels++;
@@ -235,7 +244,8 @@ function calculateAmbientOcclusion(
     uv: [number, number], 
     face: MeshFace, 
     mesh: Mesh, 
-    groundPlane: THREE.Mesh
+    groundPlane: THREE.Mesh,
+    bvh: MeshBVH
 ): [number, number, number, number] {
     const [x, y, z]: [number, number, number] = position;
     const [normalX, normalY, normalZ]: [number, number, number] = face.getNormal(true);
@@ -261,12 +271,23 @@ function calculateAmbientOcclusion(
             (Math.random() - 0.5) * 2,
             (Math.random() - 0.5) * 2
         ).normalize();
-
-        const ray: THREE.Raycaster = new THREE.Raycaster(vectorPool.origin, vectorPool.direction, 0.001, length);
-        const intersects: THREE.Intersection[] = ray.intersectObjects([mesh.mesh, groundPlane]);
+        const raycaster: THREE.Raycaster = new THREE.Raycaster(vectorPool.origin, vectorPool.direction, 0.001, length);
+        // const intersects: THREE.Intersection[] = ray.intersectObjects([mesh.mesh, groundPlane]);
         
-        if (intersects.length > 0) {
+        const invMat: THREE.Matrix4 =  (mesh.mesh as THREE.Mesh).matrixWorld.clone().invert();
+
+        // raycasting
+        // ensure the ray is in the local space of the geometry being cast against
+        raycaster.ray.applyMatrix4( invMat );
+        const hit = bvh.raycastFirst( raycaster.ray );
+        if (hit) {
             occlusion += 1;
+        }else{
+            // Check if the ray intersects the ground plane
+            const groundPlaneHit = raycaster.intersectObject(groundPlane).length > 0;
+            if (groundPlaneHit) {
+                occlusion += 1;
+            }
         }
     }
 
