@@ -218,12 +218,15 @@ async function processFaceTexture(
             
             // Get x,y,z in 3d space of the face at this u,v
             const {x, y, z} = face.UVToLocal([u + 0.5, v + 0.5]);
-            const [r, g, b, a]: [number, number, number, number] = calculateAmbientOcclusion([x, y, z], [u, v], face, mesh, groundPlane, bvh);
+            const occlusion = calculateAmbientOcclusion([x, y, z], [u, v], face, mesh, groundPlane, bvh);
 
-            ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${a})`;
-            ctx.fillRect(u, v, 1, 1);
-            processedPixels++;
-            cache[key] = true; // Mark this pixel as processed
+            if (occlusion) {
+                const [r, g, b, a] = occlusion;
+                ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${a})`;
+                ctx.fillRect(u, v, 1, 1);
+                processedPixels++;
+                cache[key] = true; // Mark this pixel as processed
+            }
         }
             
     });
@@ -252,7 +255,7 @@ function calculateAmbientOcclusion(
     mesh: Mesh, 
     groundPlane: THREE.Mesh,
     bvh: MeshBVH
-): [number, number, number, number] {
+): [number, number, number, number] | null {
     const [x, y, z]: [number, number, number] = position;
     const [normalX, normalY, normalZ]: [number, number, number] = face.getNormal(true);
     
@@ -260,9 +263,10 @@ function calculateAmbientOcclusion(
     vectorPool.normal.set(normalX, normalY, normalZ);
     
     let occlusion: number = 0;
+    let backfaceHits: number = 0;
     const length: number = 8;
     const rayCount: number = SAMPLES;
-    
+
     for (let i: number = 0; i < rayCount; i++) {
         // Reuse origin vector
         vectorPool.origin.set(x, y, z)
@@ -282,14 +286,21 @@ function calculateAmbientOcclusion(
         const invMat: THREE.Matrix4 =  (mesh.mesh as THREE.Mesh).matrixWorld.clone().invert();
 
         raycaster.ray.applyMatrix4( invMat );
-        const hit = bvh.raycastFirst( raycaster.ray );
+        const hit = bvh.raycastFirst( raycaster.ray, THREE.DoubleSide );
         if (hit) {
-            occlusion += 1;
+            const faceNormal = hit.face!.normal!;
+            const dot = vectorPool.direction.dot(faceNormal);
+            if (dot < 0) {
+                occlusion += 1;
+            }else{
+                backfaceHits += 1
+                occlusion += 1;
+            }
         }else{
             // Check if the ray intersects the ground plane
             const groundPlaneHit = raycaster.intersectObject(groundPlane).length > 0;
             if (groundPlaneHit) {
-                occlusion += 1;
+                 occlusion += 1;
             }
         }
     }
@@ -310,7 +321,17 @@ function calculateAmbientOcclusion(
         t = Math.pow(t, highlightGamma);
         color = HIGHLIGHT_COLOR;
     }
-    
+
+    const backfaceRatio = backfaceHits / rayCount;
+    // color = {
+    //     r: lerp(color.r, 255, backfaceRatio),
+    //     g: lerp(color.g, 0, backfaceRatio),
+    //     b: lerp(color.b, 0, backfaceRatio),
+    //     a: lerp(color.a, 1, backfaceRatio)
+    // }
+    if (backfaceRatio > 0.25) {
+        return null
+    }
     return [
         color.r,
         color.g,
