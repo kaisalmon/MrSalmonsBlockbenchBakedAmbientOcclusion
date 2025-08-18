@@ -16,10 +16,6 @@ interface VectorPool {
     normal: THREE.Vector3;
 }
 
-interface ProcessCallback {
-    (missing: boolean, withTextures: boolean, processedPixels: number): void;
-}
-
 interface PixelResult {
     color: [number, number, number, number];
     backfaceRatio: number;
@@ -43,6 +39,7 @@ const SHADOW_COLOR: Color = {
 };
 
 const SAMPLES: number = 1000;
+const RETAIN_TEXTURE_TRANSPARENCY: boolean = true;
 
 (Plugin as any).register('blockbench-baked-ao', {
     title: 'Blockbench Baked AO',
@@ -85,11 +82,10 @@ const SAMPLES: number = 1000;
                     });
                     
                     // Process each face
-                    await processMeshFaces(mesh, hasSelectedFaces, (missing: boolean, withTextures: boolean, processedPixels: number) => {
-                        anyMissing = anyMissing || missing;
-                        anyWithTextures = anyWithTextures || withTextures;
-                        pixelCount += processedPixels;
-                    });
+                    const result = await processMeshFaces(mesh, hasSelectedFaces);
+                    anyMissing = anyMissing || result.anyMissing;
+                    anyWithTextures = anyWithTextures || result.anyWithTextures;
+                    pixelCount += result.totalPixelsProcessed;
                 }
                 
                 performance.mark("endAO");
@@ -119,13 +115,18 @@ const SAMPLES: number = 1000;
     }
 });
 
+interface ProcessMeshFacesResult {
+    anyMissing: boolean;
+    anyWithTextures: boolean;
+    totalPixelsProcessed: number;
+}
 /**
  * Process all faces of a mesh asynchronously
  * @param mesh - The mesh to process
  * @param hasSelectedFaces - Whether the mesh has selected faces
  * @param callback - Callback to report progress
  */
-async function processMeshFaces(mesh: Mesh, hasSelectedFaces: boolean, callback: ProcessCallback): Promise<void> {
+async function processMeshFaces(mesh: Mesh, hasSelectedFaces: boolean): Promise<ProcessMeshFacesResult> {
     let anyMissing: boolean = false;
     let anyWithTextures: boolean = false;
     let totalPixelsProcessed: number = 0;
@@ -164,7 +165,7 @@ async function processMeshFaces(mesh: Mesh, hasSelectedFaces: boolean, callback:
             opacity: 0.5
         })
     );
-
+    console.log(`Lowest Y: ${lowestY}, Highest Y: ${highestY}`);
     groundPlane.rotation.set(-Math.PI / 2, 0, 0); // Rotate to be horizontal
     groundPlane.position.setY(lowestY - 1);
     groundPlane.updateMatrix();
@@ -182,8 +183,8 @@ async function processMeshFaces(mesh: Mesh, hasSelectedFaces: boolean, callback:
             const pixelsProcessed: number = await processTextureWithFaces(texture, textureFaces, mesh, groundPlane, bvh);
             totalPixelsProcessed += pixelsProcessed;
         }
-        
-        callback(anyMissing, anyWithTextures, totalPixelsProcessed);
+
+        return { anyMissing, anyWithTextures, totalPixelsProcessed };
     } finally {
         (mesh.mesh as THREE.Mesh).geometry = geometryBackup;
     }
@@ -261,8 +262,13 @@ async function processTextureWithFaces(
         
         for (const [pixelKey, result] of bestResults) {
             const [u, v] = pixelKey.split(',').map(x => parseInt(x, 10));
-            const [r, g, b, a] = result.color;
-            
+            let [r, g, b, a] = result.color;
+
+            if (RETAIN_TEXTURE_TRANSPARENCY) {
+                const srcAlpha = ctx.getImageData(u, v, 1, 1).data[3];
+                a *= srcAlpha / 255;
+            }
+
             ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${a})`;
             ctx.fillRect(u, v, 1, 1);
             processedPixels++;
