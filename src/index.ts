@@ -20,6 +20,11 @@ interface ProcessCallback {
     (missing: boolean, withTextures: boolean, processedPixels: number): void;
 }
 
+interface PixelResult {
+    color: [number, number, number, number];
+    backfaceRatio: number;
+}
+
 let button: Action;
 
 /* #fffa88bb */
@@ -128,7 +133,26 @@ async function processMeshFaces(mesh: Mesh, hasSelectedFaces: boolean, callback:
     const faces: MeshFace[] = [];
     mesh.forAllFaces((face: MeshFace) => faces.push(face));
     
-    const cache: Record<string, boolean> = {}; 
+    // Group faces by texture
+    const facesByTexture: Map<Texture, MeshFace[]> = new Map();
+    
+    for (const face of faces) {
+        const tex: Texture | undefined = face.getTexture();
+        if (!tex) {
+            anyMissing = true;
+            continue;
+        }
+        
+        if (hasSelectedFaces && !face.isSelected()) continue;
+        
+        anyWithTextures = true;
+        
+        if (!facesByTexture.has(tex)) {
+            facesByTexture.set(tex, []);
+        }
+        facesByTexture.get(tex)!.push(face);
+    }
+    
     const [lowestY, highestY]: [number, number] = getHighestAndLowestY(mesh);
     
     const groundPlane: THREE.Mesh = new THREE.Mesh(
@@ -151,52 +175,45 @@ async function processMeshFaces(mesh: Mesh, hasSelectedFaces: boolean, callback:
     const bvh: MeshBVH = new MeshBVH(geometry, {
         indirect: true,
     });
-    try{
-        for (const face of faces) {
-            const tex: Texture | undefined = face.getTexture();
-            if (!tex) {
-                anyMissing = true;
-                continue;
-            }
-            
-            if (hasSelectedFaces && !face.isSelected()) continue;
-            
-            anyWithTextures = true;
-            const pixelsProcessed: number = await processFaceTexture(tex, face, mesh, cache, groundPlane, bvh);
+    
+    try {
+        // Process each texture
+        for (const [texture, textureFaces] of facesByTexture) {
+            const pixelsProcessed: number = await processTextureWithFaces(texture, textureFaces, mesh, groundPlane, bvh);
             totalPixelsProcessed += pixelsProcessed;
         }
         
         callback(anyMissing, anyWithTextures, totalPixelsProcessed);
-    }finally {
+    } finally {
         (mesh.mesh as THREE.Mesh).geometry = geometryBackup;
     }
 }
 
 /**
- * Process a single face's texture asynchronously
- * @param tex - The texture to edit
- * @param face - The face being processed
- * @param mesh - The mesh containing the face
- * @param cache - Cache to avoid reprocessing pixels
+ * Process all faces that use a specific texture
+ * @param texture - The texture to edit
+ * @param faces - All faces that use this texture
+ * @param mesh - The mesh containing the faces
  * @param groundPlane - Ground plane for ambient occlusion calculations
+ * @param bvh - BVH for raycasting
  * @returns Number of pixels processed
  */
-async function processFaceTexture(
-    tex: Texture, 
-    face: MeshFace, 
+async function processTextureWithFaces(
+    texture: Texture, 
+    faces: MeshFace[], 
     mesh: Mesh, 
-    cache: Record<string, boolean>, 
     groundPlane: THREE.Mesh,
     bvh: MeshBVH,
 ): Promise<number> {
-    await new Promise(resolve => setTimeout(resolve, 0));
-    let processedPixels: number = 0;
-    tex.edit((htmlCanvasElement: HTMLCanvasElement) => {
-        const ctx: CanvasRenderingContext2D = htmlCanvasElement.getContext('2d')!;
+    
+    // Track best result for each pixel
+    const bestResults: Map<string, PixelResult> = new Map();
+    
+    // Calculate ambient occlusion for all face/pixel combinations
+    for (const face of faces) {
         const occupationMatrix: Record<string, Record<string, boolean>> = face.getOccupationMatrix();
         
-        
-        // Collect all pixel coordinates first
+        // Collect all pixel coordinates for this face
         const pixelCoords: [number, number][] = [];
         Object.keys(occupationMatrix).forEach((uStr: string) => {
             Object.keys(occupationMatrix[uStr]).forEach((vStr: string) => {
@@ -207,29 +224,51 @@ async function processFaceTexture(
             });
         });
         
-        // Process pixels in batches
-        const getKey = (u: number, v: number): string => `${u},${v}`;
-        
+        let i = 0;
+        // Process pixels for this face
         for (const [u, v] of pixelCoords) {
-            const key: string = getKey(u, v);
-            if (cache[key]) {
-                continue;
-            }
+            const key: string = `${u},${v}`;
             
             // Get x,y,z in 3d space of the face at this u,v
             const {x, y, z} = face.UVToLocal([u + 0.5, v + 0.5]);
-            const occlusion = calculateAmbientOcclusion([x, y, z], [u, v], face, mesh, groundPlane, bvh);
+            const result = calculateAmbientOcclusion([x, y, z], [u, v], face, mesh, groundPlane, bvh);
 
-            if (occlusion) {
-                const [r, g, b, a] = occlusion;
-                ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${a})`;
-                ctx.fillRect(u, v, 1, 1);
-                processedPixels++;
-                cache[key] = true; // Mark this pixel as processed
+            if (result) {
+                const [color, backfaceRatio] = result;
+                
+                // Check if this is the best result for this pixel so far
+                const existing = bestResults.get(key);
+                if (!existing || backfaceRatio < existing.backfaceRatio) {
+                    bestResults.set(key, {
+                        color: color,
+                        backfaceRatio: backfaceRatio
+                    });
+                }
+            }
+
+            i++;
+            if (i % 32 === 0) {
+                // Yield to allow UI updates
+                await new Promise(resolve => setTimeout(resolve, 0));
             }
         }
+    }
+    
+    // Apply all results in a single edit session
+    let processedPixels: number = 0;
+    texture.edit((htmlCanvasElement: HTMLCanvasElement) => {
+        const ctx: CanvasRenderingContext2D = htmlCanvasElement.getContext('2d')!;
+        
+        for (const [pixelKey, result] of bestResults) {
+            const [u, v] = pixelKey.split(',').map(x => parseInt(x, 10));
+            const [r, g, b, a] = result.color;
             
+            ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${a})`;
+            ctx.fillRect(u, v, 1, 1);
+            processedPixels++;
+        }
     });
+    
     return processedPixels;
 }
 
@@ -246,7 +285,8 @@ const vectorPool: VectorPool = {
  * @param face - The face being processed
  * @param mesh - The mesh containing the face
  * @param groundPlane - Ground plane for occlusion calculations
- * @returns RGBA values [r,g,b,a] for the ambient occlusion
+ * @param bvh - BVH for raycasting
+ * @returns [RGBA values, backface ratio] for the ambient occlusion, or null if backface ratio > 25%
  */
 function calculateAmbientOcclusion(
     position: [number, number, number], 
@@ -255,7 +295,7 @@ function calculateAmbientOcclusion(
     mesh: Mesh, 
     groundPlane: THREE.Mesh,
     bvh: MeshBVH
-): [number, number, number, number] | null {
+): [[number, number, number, number], number] | null {
     const [x, y, z]: [number, number, number] = position;
     const [normalX, normalY, normalZ]: [number, number, number] = face.getNormal(true);
     
@@ -290,12 +330,10 @@ function calculateAmbientOcclusion(
         if (hit) {
             const faceNormal = hit.face!.normal!;
             const dot = vectorPool.direction.dot(faceNormal);
-            if (dot < 0) {
-                occlusion += 1;
-            }else{
-                backfaceHits += 1
-                occlusion += 1;
+            if (dot > 0) {
+                backfaceHits += 1;
             }
+            occlusion += 1;
         }else{
             // Check if the ray intersects the ground plane
             const groundPlaneHit = raycaster.intersectObject(groundPlane).length > 0;
@@ -306,6 +344,7 @@ function calculateAmbientOcclusion(
     }
 
     let occlusionFactor: number = 1 - occlusion / rayCount;
+    const backfaceRatio = backfaceHits / rayCount;
 
     let t: number;
     let color: Color;
@@ -322,21 +361,9 @@ function calculateAmbientOcclusion(
         color = HIGHLIGHT_COLOR;
     }
 
-    const backfaceRatio = backfaceHits / rayCount;
-    // color = {
-    //     r: lerp(color.r, 255, backfaceRatio),
-    //     g: lerp(color.g, 0, backfaceRatio),
-    //     b: lerp(color.b, 0, backfaceRatio),
-    //     a: lerp(color.a, 1, backfaceRatio)
-    // }
-    if (backfaceRatio > 0.25) {
-        return null
-    }
     return [
-        color.r,
-        color.g,
-        color.b,
-        color.a * t
+        [color.r, color.g, color.b, color.a * t],
+        backfaceRatio
     ];
 }
 
