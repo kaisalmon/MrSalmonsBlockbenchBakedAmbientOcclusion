@@ -21,6 +21,11 @@ interface PixelResult {
     backfaceRatio: number;
 }
 
+// New interface for the face mapping
+interface FaceMapping {
+    faceIndexToBlockbenchFace: Map<number, MeshFace>;
+}
+
 let button: Action;
 
 /* #fffa88bb */
@@ -40,6 +45,7 @@ const SHADOW_COLOR: Color = {
 
 const SAMPLES: number = 1000;
 const RETAIN_TEXTURE_TRANSPARENCY: boolean = true;
+const SAMPLE_TEXTURE_TRANSPARENCY: boolean = false;
 
 (Plugin as any).register('blockbench-baked-ao', {
     title: 'Blockbench Baked AO',
@@ -115,16 +121,45 @@ const RETAIN_TEXTURE_TRANSPARENCY: boolean = true;
     }
 });
 
+/**
+ * Build a mapping from three.js face indices to Blockbench faces
+ * This eliminates the need for expensive lookups during raycasting
+ */
+function buildFaceMapping(mesh: Mesh): FaceMapping {
+    const faceIndexToBlockbenchFace = new Map<number, MeshFace>();
+    let currentFaceIndex = 0;
+    
+    for (let key in mesh.faces) {
+        const face = mesh.faces[key];
+        const vertices = face.vertices;
+        
+        if (vertices.length < 3) continue;
+        
+        if (vertices.length === 3) {
+            // Triangle face uses 1 three.js face
+            faceIndexToBlockbenchFace.set(currentFaceIndex, face);
+            currentFaceIndex += 1;
+        } else if (vertices.length === 4) {
+            // Quad face uses 2 three.js faces (triangulated)
+            faceIndexToBlockbenchFace.set(currentFaceIndex, face);
+            faceIndexToBlockbenchFace.set(currentFaceIndex + 1, face);
+            currentFaceIndex += 2;
+        }
+    }
+    
+    return { faceIndexToBlockbenchFace };
+}
+
 interface ProcessMeshFacesResult {
     anyMissing: boolean;
     anyWithTextures: boolean;
     totalPixelsProcessed: number;
 }
+
 /**
  * Process all faces of a mesh asynchronously
  * @param mesh - The mesh to process
  * @param hasSelectedFaces - Whether the mesh has selected faces
- * @param callback - Callback to report progress
  */
 async function processMeshFaces(mesh: Mesh, hasSelectedFaces: boolean): Promise<ProcessMeshFacesResult> {
     let anyMissing: boolean = false;
@@ -177,10 +212,13 @@ async function processMeshFaces(mesh: Mesh, hasSelectedFaces: boolean): Promise<
         indirect: true,
     });
     
+    // Build face mapping once per mesh - this is the key optimization!
+    const faceMapping = buildFaceMapping(mesh);
+    
     try {
         // Process each texture
         for (const [texture, textureFaces] of facesByTexture) {
-            const pixelsProcessed: number = await processTextureWithFaces(texture, textureFaces, mesh, groundPlane, bvh);
+            const pixelsProcessed: number = await processTextureWithFaces(texture, textureFaces, mesh, groundPlane, bvh, faceMapping);
             totalPixelsProcessed += pixelsProcessed;
         }
 
@@ -197,6 +235,7 @@ async function processMeshFaces(mesh: Mesh, hasSelectedFaces: boolean): Promise<
  * @param mesh - The mesh containing the faces
  * @param groundPlane - Ground plane for ambient occlusion calculations
  * @param bvh - BVH for raycasting
+ * @param faceMapping - Pre-computed mapping from face indices to Blockbench faces
  * @returns Number of pixels processed
  */
 async function processTextureWithFaces(
@@ -205,6 +244,7 @@ async function processTextureWithFaces(
     mesh: Mesh, 
     groundPlane: THREE.Mesh,
     bvh: MeshBVH,
+    faceMapping: FaceMapping
 ): Promise<number> {
     
     // Track best result for each pixel
@@ -232,7 +272,7 @@ async function processTextureWithFaces(
             
             // Get x,y,z in 3d space of the face at this u,v
             const {x, y, z} = face.UVToLocal([u + 0.5, v + 0.5]);
-            const result = calculateAmbientOcclusion([x, y, z], [u, v], face, mesh, groundPlane, bvh);
+            const result = calculateAmbientOcclusion([x, y, z], [u, v], face, mesh, groundPlane, bvh, faceMapping);
 
             if (result) {
                 const [color, backfaceRatio] = result;
@@ -292,6 +332,7 @@ const vectorPool: VectorPool = {
  * @param mesh - The mesh containing the face
  * @param groundPlane - Ground plane for occlusion calculations
  * @param bvh - BVH for raycasting
+ * @param faceMapping - Pre-computed mapping from face indices to Blockbench faces
  * @returns [RGBA values, backface ratio] for the ambient occlusion, or null if backface ratio > 25%
  */
 function calculateAmbientOcclusion(
@@ -300,7 +341,8 @@ function calculateAmbientOcclusion(
     face: MeshFace, 
     mesh: Mesh, 
     groundPlane: THREE.Mesh,
-    bvh: MeshBVH
+    bvh: MeshBVH,
+    faceMapping: FaceMapping
 ): [[number, number, number, number], number] | null {
     const [x, y, z]: [number, number, number] = position;
     const [normalX, normalY, normalZ]: [number, number, number] = face.getNormal(true);
@@ -339,7 +381,25 @@ function calculateAmbientOcclusion(
             if (dot > 0) {
                 backfaceHits += 1;
             }
-            occlusion += 1;
+            if(!SAMPLE_TEXTURE_TRANSPARENCY){
+                occlusion += 1;
+            }else{
+                // Use the optimized face lookup instead of the expensive linear search
+                const blockbenchFace = faceMapping.faceIndexToBlockbenchFace.get(hit.faceIndex!);
+                if (blockbenchFace) {
+                    const [hitU, hitV] = blockbenchFace.localToUV(hit.point!);
+                    const texture: Texture | undefined = blockbenchFace.getTexture();
+                    if (texture) {
+                        const pixelColor: ImageData = texture.ctx.getImageData(hitU, hitV, 1, 1);
+                        occlusion += pixelColor.data[3] / 255;
+                    } else {
+                        occlusion += 1;
+                    }
+                } else {
+                    // Fallback to 1 if face not found (shouldn't happen with proper mapping)
+                    occlusion += 1;
+                }
+            }
         }else{
             // Check if the ray intersects the ground plane
             const groundPlaneHit = raycaster.intersectObject(groundPlane).length > 0;
