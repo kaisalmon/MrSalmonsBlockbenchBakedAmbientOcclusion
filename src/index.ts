@@ -28,7 +28,6 @@ interface FaceMapping {
 
 let button: Action;
 
-/* #fffa88bb */
 const HIGHLIGHT_COLOR: Color = {
     r: 231,
     g: 225,
@@ -46,6 +45,8 @@ const SHADOW_COLOR: Color = {
 const SAMPLES: number = 1000;
 const RETAIN_TEXTURE_TRANSPARENCY: boolean = true;
 const SAMPLE_TEXTURE_TRANSPARENCY: boolean = false;
+const SHADOW_GAMMA: number = 1.0;
+const HIGHLIGHT_GAMMA: number = 0.5;
 
 (Plugin as any).register('blockbench-baked-ao', {
     title: 'Blockbench Baked AO',
@@ -60,58 +61,11 @@ const SAMPLE_TEXTURE_TRANSPARENCY: boolean = false;
             description: 'Perform ambient occlusion baking on selected meshes',
             icon: 'cake',
             click: async function(): Promise<void> {
-                
-                if (Mesh.selected.length === 0) {
-                    Blockbench.showToastNotification({
-                        text: 'No meshes selected',
-                    });
-                    return;
-                }
-                
-                let anyMissing: boolean = false;
-                let anyWithTextures: boolean = false;
-                let pixelCount: number = 0;
-                
-                // Show progress notification
-                Blockbench.showToastNotification({
-                    text: 'Starting ambient occlusion baking...',
+                return bakeAmbientOcclusion({
+                    onProgress: (progress: number) => {
+                        console.log(`Baking progress: ${(progress * 100).toFixed(2)}%`);
+                    }
                 });
-                
-                performance.mark("startAO");
-
-                for (const mesh of Mesh.selected) {
-                    let hasSelectedFaces: boolean = false;
-                    mesh.forAllFaces((face: MeshFace) => {
-                        if (face.isSelected()) {
-                            hasSelectedFaces = true;
-                        }
-                    });
-                    
-                    // Process each face
-                    const result = await processMeshFaces(mesh, hasSelectedFaces);
-                    anyMissing = anyMissing || result.anyMissing;
-                    anyWithTextures = anyWithTextures || result.anyWithTextures;
-                    pixelCount += result.totalPixelsProcessed;
-                }
-                
-                performance.mark("endAO");
-                const measure: PerformanceMeasure = performance.measure("AO Processing Time", "startAO", "endAO");
-                console.log(`AO Processing Time: ${measure.duration}ms`);
-                
-                if (!anyWithTextures) {
-                    Blockbench.showToastNotification({
-                        text: 'No textures found on selected meshes',
-                    });
-                } else if (anyMissing) {
-                    Blockbench.showToastNotification({
-                        text: 'Some faces are missing textures',
-                    });
-                } else {
-                    Blockbench.showToastNotification({
-                        text: `Done! Processed ${pixelCount} pixels.`,
-                    });
-                }
-                
             }
         });
         MenuBar.addAction(button, 'filter');
@@ -120,6 +74,69 @@ const SAMPLE_TEXTURE_TRANSPARENCY: boolean = false;
         button.delete();
     }
 });
+
+interface BakeAmbientOcclusionOptions {
+    onProgress?: (progress: number) => void;
+}
+
+async function bakeAmbientOcclusion(opts: BakeAmbientOcclusionOptions): Promise<void> {
+
+    if (Mesh.selected.length === 0) {
+        Blockbench.showToastNotification({
+            text: 'No meshes selected',
+        });
+        return Promise.resolve();
+    }
+
+    let anyMissing: boolean = false;
+    let anyWithTextures: boolean = false;
+    let pixelCount: number = 0;
+    let faceCount: number = 0;
+
+    // Show progress notification
+    Blockbench.showToastNotification({
+        text: 'Starting ambient occlusion baking...',
+    });
+
+    performance.mark("startAO");
+
+    for (const mesh of Mesh.selected) {
+        let hasSelectedFaces: boolean = false;
+        let facesInMesh = 0;
+        mesh.forAllFaces((face: MeshFace) => {
+            if (face.isSelected()) {
+                hasSelectedFaces = true;
+            }
+            facesInMesh++;
+        });
+        
+        // Process each face
+        const result = await processMeshFaces(mesh, hasSelectedFaces, opts);
+        anyMissing = anyMissing || result.anyMissing;
+        anyWithTextures = anyWithTextures || result.anyWithTextures;
+        pixelCount += result.totalPixelsProcessed;
+        faceCount += result.totalFacesProcessed;
+    }
+
+    performance.mark("endAO");
+    const measure: PerformanceMeasure = performance.measure("AO Processing Time", "startAO", "endAO");
+    console.log(`AO Processing Time: ${measure.duration}ms`);
+
+    if (!anyWithTextures) {
+        Blockbench.showToastNotification({
+            text: 'No textures found on selected meshes',
+        });
+    } else if (anyMissing) {
+        Blockbench.showToastNotification({
+            text: 'Some faces are missing textures',
+        });
+    } else {
+        Blockbench.showToastNotification({
+            text: `Done! Processed ${pixelCount} pixels.`,
+        });
+    }
+
+}
 
 /**
  * Build a mapping from three.js face indices to Blockbench faces
@@ -154,6 +171,7 @@ interface ProcessMeshFacesResult {
     anyMissing: boolean;
     anyWithTextures: boolean;
     totalPixelsProcessed: number;
+    totalFacesProcessed: number;
 }
 
 /**
@@ -161,11 +179,11 @@ interface ProcessMeshFacesResult {
  * @param mesh - The mesh to process
  * @param hasSelectedFaces - Whether the mesh has selected faces
  */
-async function processMeshFaces(mesh: Mesh, hasSelectedFaces: boolean): Promise<ProcessMeshFacesResult> {
+async function processMeshFaces(mesh: Mesh, hasSelectedFaces: boolean, opts: BakeAmbientOcclusionOptions): Promise<ProcessMeshFacesResult> {
     let anyMissing: boolean = false;
     let anyWithTextures: boolean = false;
     let totalPixelsProcessed: number = 0;
-    
+    let totalFacesProcessed = 0;
     const faces: MeshFace[] = [];
     mesh.forAllFaces((face: MeshFace) => faces.push(face));
     
@@ -189,7 +207,7 @@ async function processMeshFaces(mesh: Mesh, hasSelectedFaces: boolean): Promise<
         facesByTexture.get(tex)!.push(face);
     }
     
-    const [lowestY, highestY]: [number, number] = getHighestAndLowestY(mesh);
+    const [lowestY]: [number, number] = getHighestAndLowestY(mesh);
     
     const groundPlane: THREE.Mesh = new THREE.Mesh(
         new THREE.PlaneGeometry(1000, 1000),
@@ -200,7 +218,6 @@ async function processMeshFaces(mesh: Mesh, hasSelectedFaces: boolean): Promise<
             opacity: 0.5
         })
     );
-    console.log(`Lowest Y: ${lowestY}, Highest Y: ${highestY}`);
     groundPlane.rotation.set(-Math.PI / 2, 0, 0); // Rotate to be horizontal
     groundPlane.position.setY(lowestY - 1);
     groundPlane.updateMatrix();
@@ -218,11 +235,12 @@ async function processMeshFaces(mesh: Mesh, hasSelectedFaces: boolean): Promise<
     try {
         // Process each texture
         for (const [texture, textureFaces] of facesByTexture) {
-            const pixelsProcessed: number = await processTextureWithFaces(texture, textureFaces, mesh, groundPlane, bvh, faceMapping);
+            const { pixelsProcessed, facesProcessed } = await processTextureWithFaces(texture, textureFaces, mesh, groundPlane, bvh, faceMapping, opts);
             totalPixelsProcessed += pixelsProcessed;
+            totalFacesProcessed += facesProcessed;
         }
 
-        return { anyMissing, anyWithTextures, totalPixelsProcessed };
+        return { anyMissing, anyWithTextures, totalPixelsProcessed, totalFacesProcessed };
     } finally {
         (mesh.mesh as THREE.Mesh).geometry = geometryBackup;
     }
@@ -244,12 +262,17 @@ async function processTextureWithFaces(
     mesh: Mesh, 
     groundPlane: THREE.Mesh,
     bvh: MeshBVH,
-    faceMapping: FaceMapping
-): Promise<number> {
+    faceMapping: FaceMapping,
+    opts: BakeAmbientOcclusionOptions
+): Promise<{
+    pixelsProcessed: number;
+    facesProcessed: number;
+}> {
     
     // Track best result for each pixel
     const bestResults: Map<string, PixelResult> = new Map();
     
+    let facesProcessed: number = 0;
     // Calculate ambient occlusion for all face/pixel combinations
     for (const face of faces) {
         const occupationMatrix: Record<string, Record<string, boolean>> = face.getOccupationMatrix();
@@ -293,6 +316,8 @@ async function processTextureWithFaces(
                 await new Promise(resolve => setTimeout(resolve, 0));
             }
         }
+        facesProcessed++;
+        opts?.onProgress?.(facesProcessed / faces.length);
     }
     
     // Apply all results in a single edit session
@@ -314,8 +339,11 @@ async function processTextureWithFaces(
             processedPixels++;
         }
     });
-    
-    return processedPixels;
+
+    return {
+        pixelsProcessed: processedPixels,
+        facesProcessed: faces.length
+    };
 }
 
 const vectorPool: VectorPool = {
@@ -417,13 +445,11 @@ function calculateAmbientOcclusion(
     
     if (occlusionFactor < 0.5) {
         t = (0.5 - occlusionFactor) * 2;
-        const shadowGamma: number = 1.0;
-        t = Math.pow(t, shadowGamma);
+        t = Math.pow(t, SHADOW_GAMMA);
         color = SHADOW_COLOR;
     } else {
         t = (occlusionFactor - 0.5) * 2;
-        const highlightGamma: number = 0.5;
-        t = Math.pow(t, highlightGamma);
+        t = Math.pow(t, HIGHLIGHT_GAMMA);
         color = HIGHLIGHT_COLOR;
     }
 
