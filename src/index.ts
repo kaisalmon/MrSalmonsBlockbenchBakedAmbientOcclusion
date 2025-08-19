@@ -40,29 +40,8 @@ let button: Action;
             name: 'Bake Ambient Occlusion',
             description: 'Perform ambient occlusion baking on selected meshes',
             icon: 'cake',
-            click: async function(): Promise<void> {
-                return bakeAmbientOcclusion({
-                    onProgress: (progress: number) => {
-                        console.log(`Baking progress: ${(progress * 100).toFixed(2)}%`);
-                    },
-                    highlightColor: {
-                        r: 231,
-                        g: 225,
-                        b: 164,
-                        a: 0.4
-                    },
-                    shadowColor: {
-                        r: 36,
-                        g: 11,
-                        b: 55,
-                        a: 0.5
-                    },
-                    samples: 1000,
-                    retainTextureTransparency: true,
-                    sampleTextureTransparency: false,
-                    shadowGamma: 1.0,
-                    highlightGamma: 0.5
-                });
+            click: function(): void {
+                showAmbientOcclusionDialog();
             }
         });
         MenuBar.addAction(button, 'filter');
@@ -71,6 +50,130 @@ let button: Action;
         button.delete();
     }
 });
+
+/**
+ * Convert RGB color object to hex string for color picker
+ */
+function colorToHex(color: Color): string {
+    const r = Math.round(color.r).toString(16).padStart(2, '0');
+    const g = Math.round(color.g).toString(16).padStart(2, '0');
+    const b = Math.round(color.b).toString(16).padStart(2, '0');
+    return `#${r}${g}${b}`;
+}
+
+/**
+ * Convert hex string to RGB color object
+ */
+function hexToColor(hex: string, alpha: number): Color {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return { r, g, b, a: alpha };
+}
+
+/**
+ * Show the ambient occlusion configuration dialog
+ */
+function showAmbientOcclusionDialog(): void {
+    // Default values
+    const defaultHighlightColor: Color = { r: 231, g: 225, b: 164, a: 0.4 };
+    const defaultShadowColor: Color = { r: 36, g: 11, b: 55, a: 0.5 };
+    
+    const dialog = new Dialog('ambient_occlusion_config', {
+        title: 'Ambient Occlusion Settings',
+        width: 400,
+        form: {
+            highlight_color: {
+                label: 'Highlight Color',
+                type: 'color',
+                value: colorToHex(defaultHighlightColor),
+                description: 'Color used for areas with high ambient lighting'
+            },
+            highlight_alpha: {
+                label: 'Highlight Opacity',
+                type: 'range',
+                min: 0,
+                max: 1,
+                step: 0.01,
+                value: defaultHighlightColor.a,
+                description: 'Opacity of the highlight color overlay'
+            },
+            highlight_gamma: {
+                label: 'Highlight Gamma',
+                type: 'range',
+                min: 0.1,
+                max: 3.0,
+                step: 0.1,
+                value: 0.5,
+                description: 'Gamma correction for highlight areas (lower = more contrast)'
+            },
+            shadow_color: {
+                label: 'Shadow Color',
+                type: 'color',
+                value: colorToHex(defaultShadowColor),
+                description: 'Color used for occluded/shadowed areas'
+            },
+            shadow_alpha: {
+                label: 'Shadow Opacity',
+                type: 'range',
+                min: 0,
+                max: 1,
+                step: 0.01,
+                value: defaultShadowColor.a,
+                description: 'Opacity of the shadow color overlay'
+            },
+            shadow_gamma: {
+                label: 'Shadow Gamma',
+                type: 'range',
+                min: 0.1,
+                max: 3.0,
+                step: 0.1,
+                value: 1.0,
+                description: 'Gamma correction for shadow areas (higher = softer shadows)'
+            },
+            samples: {
+                label: 'Ray Samples',
+                type: 'number',
+                min: 100,
+                max: 5000,
+                step: 100,
+                value: 1000,
+                description: 'Number of rays cast per pixel (higher = better quality, slower)'
+            },
+            retain_texture_transparency: {
+                label: 'Retain Texture Transparency',
+                type: 'checkbox',
+                value: true,
+                description: 'Preserve the original transparency of textures'
+            },
+            sample_texture_transparency: {
+                label: 'Sample Texture Transparency',
+                type: 'checkbox',
+                value: false,
+                description: 'Consider texture transparency when calculating occlusion (slower but more accurate)'
+            }
+        },
+        onConfirm: function(formResult: any) {
+            console.log({formResult})
+            const options: BakeAmbientOcclusionOptions = {
+                onProgress: (progress: number) => {
+                    console.log(`Baking progress: ${(progress * 100).toFixed(2)}%`);
+                },
+                highlightColor: hexToColor(formResult.highlight_color.toHex(), formResult.highlight_alpha),
+                shadowColor: hexToColor(formResult.shadow_color.toHex(), formResult.shadow_alpha),
+                samples: formResult.samples,
+                retainTextureTransparency: formResult.retain_texture_transparency,
+                sampleTextureTransparency: formResult.sample_texture_transparency,
+                shadowGamma: formResult.shadow_gamma,
+                highlightGamma: formResult.highlight_gamma
+            };
+            
+            bakeAmbientOcclusion(options);
+        }
+    });
+    
+    dialog.show();
+}
 
 interface BakeAmbientOcclusionOptions {
     onProgress?: (progress: number) => void;
@@ -231,6 +334,8 @@ async function processMeshFaces(mesh: Mesh, hasSelectedFaces: boolean, opts: Bak
     const geometryBackup = geometry.clone(); // Backup as BVH mutates the geometry in a way that causes bugs in Blockbench
     const bvh: MeshBVH = new MeshBVH(geometry, {
         indirect: true,
+        maxDepth: 1000,
+        maxLeafTris: 1,
     });
     
     // Build face mapping once per mesh - this is the key optimization!
