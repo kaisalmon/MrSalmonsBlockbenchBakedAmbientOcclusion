@@ -28,26 +28,6 @@ interface FaceMapping {
 
 let button: Action;
 
-const HIGHLIGHT_COLOR: Color = {
-    r: 231,
-    g: 225,
-    b: 164,
-    a: 0.4
-};
-
-const SHADOW_COLOR: Color = {
-    r: 36,
-    g: 11,
-    b: 55,
-    a: 0.5
-};
-
-const SAMPLES: number = 1000;
-const RETAIN_TEXTURE_TRANSPARENCY: boolean = true;
-const SAMPLE_TEXTURE_TRANSPARENCY: boolean = false;
-const SHADOW_GAMMA: number = 1.0;
-const HIGHLIGHT_GAMMA: number = 0.5;
-
 (Plugin as any).register('blockbench-baked-ao', {
     title: 'Blockbench Baked AO',
     author: 'Kai Salmon',
@@ -64,7 +44,24 @@ const HIGHLIGHT_GAMMA: number = 0.5;
                 return bakeAmbientOcclusion({
                     onProgress: (progress: number) => {
                         console.log(`Baking progress: ${(progress * 100).toFixed(2)}%`);
-                    }
+                    },
+                    highlightColor: {
+                        r: 231,
+                        g: 225,
+                        b: 164,
+                        a: 0.4
+                    },
+                    shadowColor: {
+                        r: 36,
+                        g: 11,
+                        b: 55,
+                        a: 0.5
+                    },
+                    samples: 1000,
+                    retainTextureTransparency: true,
+                    sampleTextureTransparency: false,
+                    shadowGamma: 1.0,
+                    highlightGamma: 0.5
                 });
             }
         });
@@ -77,6 +74,13 @@ const HIGHLIGHT_GAMMA: number = 0.5;
 
 interface BakeAmbientOcclusionOptions {
     onProgress?: (progress: number) => void;
+    highlightColor: Color;
+    shadowColor: Color;
+    samples: number;
+    retainTextureTransparency: boolean;
+    sampleTextureTransparency: boolean;
+    shadowGamma: number;
+    highlightGamma: number;
 }
 
 async function bakeAmbientOcclusion(opts: BakeAmbientOcclusionOptions): Promise<void> {
@@ -295,7 +299,7 @@ async function processTextureWithFaces(
             
             // Get x,y,z in 3d space of the face at this u,v
             const {x, y, z} = face.UVToLocal([u + 0.5, v + 0.5]);
-            const result = calculateAmbientOcclusion([x, y, z], [u, v], face, mesh, groundPlane, bvh, faceMapping);
+            const result = calculateAmbientOcclusion([x, y, z], [u, v], face, mesh, groundPlane, bvh, faceMapping, opts);
 
             if (result) {
                 const [color, backfaceRatio] = result;
@@ -329,7 +333,7 @@ async function processTextureWithFaces(
             const [u, v] = pixelKey.split(',').map(x => parseInt(x, 10));
             let [r, g, b, a] = result.color;
 
-            if (RETAIN_TEXTURE_TRANSPARENCY) {
+            if (opts.retainTextureTransparency) {
                 const srcAlpha = ctx.getImageData(u, v, 1, 1).data[3];
                 a *= srcAlpha / 255;
             }
@@ -370,7 +374,8 @@ function calculateAmbientOcclusion(
     mesh: Mesh, 
     groundPlane: THREE.Mesh,
     bvh: MeshBVH,
-    faceMapping: FaceMapping
+    faceMapping: FaceMapping,
+    opts: BakeAmbientOcclusionOptions
 ): [[number, number, number, number], number] | null {
     const [x, y, z]: [number, number, number] = position;
     const [normalX, normalY, normalZ]: [number, number, number] = face.getNormal(true);
@@ -381,7 +386,7 @@ function calculateAmbientOcclusion(
     let occlusion: number = 0;
     let backfaceHits: number = 0;
     const length: number = 8;
-    const rayCount: number = SAMPLES;
+    const rayCount: number = opts.samples;
 
     for (let i: number = 0; i < rayCount; i++) {
         // Reuse origin vector
@@ -409,7 +414,7 @@ function calculateAmbientOcclusion(
             if (dot > 0) {
                 backfaceHits += 1;
             }
-            if(!SAMPLE_TEXTURE_TRANSPARENCY){
+            if(!opts.sampleTextureTransparency){
                 occlusion += 1;
             }else{
                 // Use the optimized face lookup instead of the expensive linear search
@@ -445,22 +450,18 @@ function calculateAmbientOcclusion(
     
     if (occlusionFactor < 0.5) {
         t = (0.5 - occlusionFactor) * 2;
-        t = Math.pow(t, SHADOW_GAMMA);
-        color = SHADOW_COLOR;
+        t = Math.pow(t, opts.shadowGamma);
+        color = opts.shadowColor;
     } else {
         t = (occlusionFactor - 0.5) * 2;
-        t = Math.pow(t, HIGHLIGHT_GAMMA);
-        color = HIGHLIGHT_COLOR;
+        t = Math.pow(t, opts.highlightGamma);
+        color = opts.highlightColor;
     }
 
     return [
         [color.r, color.g, color.b, color.a * t],
         backfaceRatio
     ];
-}
-
-function lerp(a: number, b: number, t: number): number {
-    return a * (1 - t) + b * t;
 }
 
 /**
