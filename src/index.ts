@@ -149,6 +149,12 @@ function showAmbientOcclusionDialog(): void {
                 value: 8,
                 description: 'Radius for ambient occlusion effect (Bigger is better for larger models or higher-resolution textures'
             },
+            simulate_ground_plane: {
+                label: 'Simulate Ground Plane',
+                type: 'checkbox',
+                value: true,
+                description: 'Simulate a ground plane, adding shadows at the base of the model'
+            },
             retain_texture_transparency: {
                 label: 'Retain Texture Transparency',
                 type: 'checkbox',
@@ -164,13 +170,22 @@ function showAmbientOcclusionDialog(): void {
         },
         onConfirm: async function(formResult: any) {
             const startTime = performance.now();
+            const jobController = { //Mutable object which can be used to cancel the job
+                cancelled: false
+            }
             const loadingDialog = new Dialog('bake_ambient_occlusion_loading', {
                 title: 'Baking Ambient Occlusion',
                 progress_bar: {
                     progress: 0,
                 },
+                cancel_on_click_outside: false,
                 singleButton: true,
+                buttons: ['Cancel'],
+                onCancel: function() {
+                    jobController.cancelled = true;
+                }
             });
+
             
             const options: BakeAmbientOcclusionOptions = {
                 onProgress: (progress: number) => {
@@ -198,13 +213,15 @@ function showAmbientOcclusionDialog(): void {
                 retainTextureTransparency: formResult.retain_texture_transparency,
                 sampleTextureTransparency: formResult.sample_texture_transparency,
                 shadowGamma: formResult.shadow_gamma,
-                highlightGamma: formResult.highlight_gamma
+                highlightGamma: formResult.highlight_gamma,
+                simulateGroundPlane: formResult.simulate_ground_plane
             };
             loadingDialog.show();
             try{
-                await bakeAmbientOcclusion(options);
+                await bakeAmbientOcclusion(options, jobController);
             } finally {
                 loadingDialog.hide();
+                Blockbench.setProgress(0); 
             }
 
         }
@@ -223,9 +240,13 @@ interface BakeAmbientOcclusionOptions {
     sampleTextureTransparency: boolean;
     shadowGamma: number;
     highlightGamma: number;
+    simulateGroundPlane: boolean;
+}
+interface JobController {
+    cancelled: boolean;
 }
 
-async function bakeAmbientOcclusion(opts: BakeAmbientOcclusionOptions): Promise<void> {
+async function bakeAmbientOcclusion(opts: BakeAmbientOcclusionOptions, jobController: JobController): Promise<void> {
 
     if (Mesh.selected.length === 0) {
         Blockbench.showToastNotification({
@@ -238,11 +259,6 @@ async function bakeAmbientOcclusion(opts: BakeAmbientOcclusionOptions): Promise<
     let anyWithTextures: boolean = false;
     let pixelCount: number = 0;
     let faceCount: number = 0;
-
-    // Show progress notification
-    Blockbench.showToastNotification({
-        text: 'Starting ambient occlusion baking...',
-    });
 
     performance.mark("startAO");
 
@@ -257,7 +273,7 @@ async function bakeAmbientOcclusion(opts: BakeAmbientOcclusionOptions): Promise<
         });
         
         // Process each face
-        const result = await processMeshFaces(mesh, hasSelectedFaces, opts);
+        const result = await processMeshFaces(mesh, hasSelectedFaces, opts, jobController);
         anyMissing = anyMissing || result.anyMissing;
         anyWithTextures = anyWithTextures || result.anyWithTextures;
         pixelCount += result.totalPixelsProcessed;
@@ -321,7 +337,7 @@ interface ProcessMeshFacesResult {
  * @param mesh - The mesh to process
  * @param hasSelectedFaces - Whether the mesh has selected faces
  */
-async function processMeshFaces(mesh: Mesh, hasSelectedFaces: boolean, opts: BakeAmbientOcclusionOptions): Promise<ProcessMeshFacesResult> {
+async function processMeshFaces(mesh: Mesh, hasSelectedFaces: boolean, opts: BakeAmbientOcclusionOptions, jobController: JobController): Promise<ProcessMeshFacesResult> {
     let anyMissing: boolean = false;
     let anyWithTextures: boolean = false;
     let totalPixelsProcessed: number = 0;
@@ -351,19 +367,7 @@ async function processMeshFaces(mesh: Mesh, hasSelectedFaces: boolean, opts: Bak
     
     const [lowestY]: [number, number] = getHighestAndLowestY(mesh);
     
-    const groundPlane: THREE.Mesh = new THREE.Mesh(
-        new THREE.PlaneGeometry(1000, 1000),
-        new THREE.MeshBasicMaterial({
-            color: 0x000000, 
-            side: THREE.FrontSide, 
-            transparent: true, 
-            opacity: 0.5
-        })
-    );
-    groundPlane.rotation.set(-Math.PI / 2, 0, 0); // Rotate to be horizontal
-    groundPlane.position.setY(lowestY - 1);
-    groundPlane.updateMatrix();
-    groundPlane.updateWorldMatrix(false, false);
+    const groundPlane: THREE.Mesh | null = opts.simulateGroundPlane ? createGroundPlane(lowestY) : null;
 
     const geometry: THREE.BufferGeometry = (mesh.mesh as THREE.Mesh).geometry;
     const geometryBackup = geometry.clone(); // Backup as BVH mutates the geometry in a way that causes bugs in Blockbench
@@ -379,7 +383,9 @@ async function processMeshFaces(mesh: Mesh, hasSelectedFaces: boolean, opts: Bak
     try {
         // Process each texture
         for (const [texture, textureFaces] of facesByTexture) {
-            const { pixelsProcessed, facesProcessed } = await processTextureWithFaces(texture, textureFaces, mesh, groundPlane, bvh, faceMapping, opts);
+            const { pixelsProcessed, facesProcessed } = await processTextureWithFaces(
+                texture, textureFaces, mesh, groundPlane, bvh, faceMapping, opts, jobController
+            );
             totalPixelsProcessed += pixelsProcessed;
             totalFacesProcessed += facesProcessed;
         }
@@ -388,6 +394,23 @@ async function processMeshFaces(mesh: Mesh, hasSelectedFaces: boolean, opts: Bak
     } finally {
         (mesh.mesh as THREE.Mesh).geometry = geometryBackup;
     }
+}
+
+function createGroundPlane(lowestY: number) {
+    const groundPlane: THREE.Mesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(1000, 1000),
+        new THREE.MeshBasicMaterial({
+            color: 0x000000,
+            side: THREE.FrontSide,
+            transparent: true,
+            opacity: 0.5
+        })
+    );
+    groundPlane.rotation.set(-Math.PI / 2, 0, 0); // Rotate to be horizontal
+    groundPlane.position.setY(lowestY - 1);
+    groundPlane.updateMatrix();
+    groundPlane.updateWorldMatrix(false, false);
+    return groundPlane;
 }
 
 /**
@@ -404,10 +427,11 @@ async function processTextureWithFaces(
     texture: Texture, 
     faces: MeshFace[], 
     mesh: Mesh, 
-    groundPlane: THREE.Mesh,
+    groundPlane: THREE.Mesh | null,
     bvh: MeshBVH,
     faceMapping: FaceMapping,
-    opts: BakeAmbientOcclusionOptions
+    opts: BakeAmbientOcclusionOptions,
+    jobController: JobController
 ): Promise<{
     pixelsProcessed: number;
     facesProcessed: number;
@@ -458,6 +482,9 @@ async function processTextureWithFaces(
             if (i % 32 === 0) {
                 // Yield to allow UI updates
                 await new Promise(resolve => setTimeout(resolve, 0));
+            }
+            if (jobController.cancelled) {
+                throw new Error('Job cancelled');
             }
         }
         facesProcessed++;
@@ -512,7 +539,7 @@ function calculateAmbientOcclusion(
     uv: [number, number], 
     face: MeshFace, 
     mesh: Mesh, 
-    groundPlane: THREE.Mesh,
+    groundPlane: THREE.Mesh | null,
     bvh: MeshBVH,
     faceMapping: FaceMapping,
     opts: BakeAmbientOcclusionOptions
@@ -573,7 +600,7 @@ function calculateAmbientOcclusion(
             }
         }else{
             // Check if the ray intersects the ground plane
-            const groundPlaneHit = raycaster.intersectObject(groundPlane).length > 0;
+            const groundPlaneHit = groundPlane && raycaster.intersectObject(groundPlane).length > 0;
             if (groundPlaneHit) {
                  occlusion += 1;
             }
