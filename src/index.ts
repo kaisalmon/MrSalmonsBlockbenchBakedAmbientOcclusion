@@ -71,13 +71,9 @@ function hexToColor(hex: string, alpha: number): Color {
     return { r, g, b, a: alpha };
 }
 
-/**
- * Show the ambient occlusion configuration dialog
- */
 function showAmbientOcclusionDialog(): void {
-    // Default values
-    const defaultHighlightColor: Color = { r: 231, g: 225, b: 164, a: 0.4 };
-    const defaultShadowColor: Color = { r: 36, g: 11, b: 55, a: 0.5 };
+    // Load saved settings or use defaults
+    const savedSettings = getPluginSettings();
     
     const dialog = new Dialog('ambient_occlusion_config', {
         title: 'Ambient Occlusion Settings',
@@ -86,7 +82,7 @@ function showAmbientOcclusionDialog(): void {
             highlight_color: {
                 label: 'Highlight Color',
                 type: 'color',
-                value: colorToHex(defaultHighlightColor),
+                value: colorToHex(savedSettings.highlightColor),
                 description: 'Color used for areas with high ambient lighting'
             },
             highlight_alpha: {
@@ -95,7 +91,7 @@ function showAmbientOcclusionDialog(): void {
                 min: 0,
                 max: 1,
                 step: 0.01,
-                value: defaultHighlightColor.a,
+                value: savedSettings.highlightColor.a,
                 description: 'Opacity of the highlight color overlay'
             },
             highlight_gamma: {
@@ -104,13 +100,13 @@ function showAmbientOcclusionDialog(): void {
                 min: 0.1,
                 max: 3.0,
                 step: 0.1,
-                value: 0.5,
+                value: savedSettings.highlightGamma,
                 description: 'Gamma correction for highlight areas (lower = more contrast)'
             },
             shadow_color: {
                 label: 'Shadow Color',
                 type: 'color',
-                value: colorToHex(defaultShadowColor),
+                value: colorToHex(savedSettings.shadowColor),
                 description: 'Color used for occluded/shadowed areas'
             },
             shadow_alpha: {
@@ -119,7 +115,7 @@ function showAmbientOcclusionDialog(): void {
                 min: 0,
                 max: 1,
                 step: 0.01,
-                value: defaultShadowColor.a,
+                value: savedSettings.shadowColor.a,
                 description: 'Opacity of the shadow color overlay'
             },
             shadow_gamma: {
@@ -128,17 +124,17 @@ function showAmbientOcclusionDialog(): void {
                 min: 0.1,
                 max: 3.0,
                 step: 0.1,
-                value: 1.0,
+                value: savedSettings.shadowGamma,
                 description: 'Gamma correction for shadow areas (higher = softer shadows)'
             },
             samples: {
                 label: 'Samples per pixel',
                 type: 'number',
-                min: 100,
-                max: 5000,
+                min: 10,
+                max: 10000,
                 step: 100,
-                value: 1000,
-                description: 'Number of samples per pixel (higher = better quality, slower)'
+                value: savedSettings.samples,
+                description: 'Number of samples per pixel (higher = better quality, slower). 100 recommended for uniform sampling, 1000 for random sampling.'
             },
             sample_method: {
                 label: 'Sample Method',
@@ -147,7 +143,7 @@ function showAmbientOcclusionDialog(): void {
                     'random': 'Random',
                     'uniform': 'Uniform',
                 },
-                value: 'random',
+                value: savedSettings.sampleMethod,
                 description: 'Method for sampling ambient occlusion rays. Random is slightly more accurate but noisier, uniform is smoother for less samples but is more prone to artifacts.'
             },
             ambient_occlusion_radius: {
@@ -156,47 +152,29 @@ function showAmbientOcclusionDialog(): void {
                 min: 1,
                 max: 32,
                 step: 1,
-                value: 8,
+                value: savedSettings.ambientOcclusionRadius,
                 description: 'Radius for ambient occlusion effect (Bigger is better for larger models or higher-resolution textures)'
             },
             simulate_ground_plane: {
                 label: 'Simulate Ground Plane',
                 type: 'checkbox',
-                value: true,
+                value: savedSettings.simulateGroundPlane,
                 description: 'Simulate a ground plane, adding shadows at the base of the model'
             },
             retain_texture_transparency: {
                 label: 'Retain Texture Transparency',
                 type: 'checkbox',
-                value: false,
+                value: savedSettings.retainTextureTransparency,
                 description: 'Preserve the original transparency of textures'
             },
             sample_texture_transparency: {
                 label: 'Sample Texture Transparency',
                 type: 'checkbox',
-                value: false,
+                value: savedSettings.sampleTextureTransparency,
                 description: 'Consider texture transparency when calculating occlusion (slower but more accurate)'
             },
         },
         onConfirm: async function(formResult: any) {
-            const startTime = performance.now();
-            const jobController = { //Mutable object which can be used to cancel the job
-                cancelled: false
-            }
-            const loadingDialog = new Dialog('bake_ambient_occlusion_loading', {
-                title: 'Baking Ambient Occlusion',
-                progress_bar: {
-                    progress: 0,
-                },
-                cancel_on_click_outside: false,
-                singleButton: true,
-                buttons: ['Cancel'],
-                onCancel: function() {
-                    jobController.cancelled = true;
-                }
-            });
-
-            
             const options: BakeAmbientOcclusionOptions = {
                 onProgress: (progress: number) => {
                     Blockbench.setProgress(progress)
@@ -214,7 +192,6 @@ function showAmbientOcclusionDialog(): void {
                             titleElem.textContent = `Baking Ambient Occlusion`;
                         }
                     }
-
                 },
                 highlightColor: hexToColor('#'+formResult.highlight_color.toHex(), formResult.highlight_alpha),
                 shadowColor: hexToColor('#'+formResult.shadow_color.toHex(), formResult.shadow_alpha),
@@ -227,6 +204,38 @@ function showAmbientOcclusionDialog(): void {
                 simulateGroundPlane: formResult.simulate_ground_plane,
                 sampleMethod: formResult.sample_method
             };
+            
+            // Save settings for next session
+            savePluginSettings({
+                highlightColor: options.highlightColor,
+                shadowColor: options.shadowColor,
+                samples: options.samples,
+                ambientOcclusionRadius: options.ambientOcclusionRadius,
+                retainTextureTransparency: options.retainTextureTransparency,
+                sampleTextureTransparency: options.sampleTextureTransparency,
+                shadowGamma: options.shadowGamma,
+                highlightGamma: options.highlightGamma,
+                simulateGroundPlane: options.simulateGroundPlane,
+                sampleMethod: options.sampleMethod
+            });
+            
+            const startTime = performance.now();
+            const jobController = {
+                cancelled: false
+            }
+            const loadingDialog = new Dialog('bake_ambient_occlusion_loading', {
+                title: 'Baking Ambient Occlusion',
+                progress_bar: {
+                    progress: 0,
+                },
+                cancel_on_click_outside: false,
+                singleButton: true,
+                buttons: ['Cancel'],
+                onCancel: function() {
+                    jobController.cancelled = true;
+                }
+            });
+
             loadingDialog.show();
             try{
                 await bakeAmbientOcclusion(options, jobController);
@@ -234,8 +243,14 @@ function showAmbientOcclusionDialog(): void {
                 loadingDialog.hide();
                 Blockbench.setProgress(0); 
             }
-
-        }
+        },
+        buttons: ['Confirm','Restore Defaults', 'Cancel'],
+        onButton(button_index:number, e:Event): void {
+            if (button_index === 1) {
+                localStorage.removeItem('blockbench_baked_ao_settings');
+                showAmbientOcclusionDialog();
+            }
+        },
     });
     
     dialog.show();
@@ -576,7 +591,6 @@ function calculateAmbientOcclusion(
             vectorPool.origin.x += (Math.random() - 0.5) * 0.5
             vectorPool.origin.y += (Math.random() - 0.5) * 0.5;
             vectorPool.origin.z += (Math.random() - 0.5) * 0.5;
-            
             // Reuse direction vector
             vectorPool.direction.set(
                 (Math.random() - 0.5) * 2,
@@ -588,9 +602,9 @@ function calculateAmbientOcclusion(
             direction = spherePoints[i];
         }
         const raycaster: THREE.Raycaster = new THREE.Raycaster(vectorPool.origin, direction, 0.001, opts.ambientOcclusionRadius);
-        const invMat: THREE.Matrix4 =  (mesh.mesh as THREE.Mesh).matrixWorld.clone().invert();
+        // const invMat: THREE.Matrix4 =  (mesh.mesh as THREE.Mesh).matrixWorld.clone().invert();
 
-        raycaster.ray.applyMatrix4( invMat );
+        // raycaster.ray.applyMatrix4( invMat );
         const hit = bvh.raycastFirst( raycaster.ray, THREE.DoubleSide );
         if (hit) {
             const faceNormal = hit.face!.normal!;
@@ -709,4 +723,34 @@ function generateFibonacciSpherePoints(n: number): Record<number, THREE.Vector3>
         );
     }
     return points;
+}
+
+function getPluginSettings(): BakeAmbientOcclusionOptions {
+    const savedSettings = localStorage.getItem('blockbench_baked_ao_settings');
+    const defaultSettings = {
+        sampleMethod: 'random' as 'random' | 'uniform',
+        highlightColor: { r: 231, g: 225, b: 164, a: 0.4 },
+        shadowColor: { r: 36, g: 11, b: 55, a: 0.5 },
+        samples: 1000,
+        ambientOcclusionRadius: 8,
+        retainTextureTransparency: false,
+        sampleTextureTransparency: false,
+        shadowGamma: 1.0,
+        highlightGamma: 0.5,
+        simulateGroundPlane: true
+    };
+    
+    if (savedSettings) {
+        try {
+            return { ...defaultSettings, ...JSON.parse(savedSettings) };
+        } catch (e) {
+            console.warn('Failed to parse saved AO settings, using defaults');
+        }
+    }
+    
+    return defaultSettings;
+}
+
+function savePluginSettings(options: Partial<BakeAmbientOcclusionOptions>): void {
+    localStorage.setItem('blockbench_baked_ao_settings', JSON.stringify(options));
 }
