@@ -140,10 +140,19 @@ function showAmbientOcclusionDialog(): void {
                 value: 1000,
                 description: 'Number of rays cast per pixel (higher = better quality, slower)'
             },
+            ambient_occlusion_radius: {
+                label: 'Ambient Occlusion Radius',
+                type: 'number',
+                min: 1,
+                max: 32,
+                step: 1,
+                value: 8,
+                description: 'Radius for ambient occlusion effect (Bigger is better for larger models or higher-resolution textures'
+            },
             retain_texture_transparency: {
                 label: 'Retain Texture Transparency',
                 type: 'checkbox',
-                value: true,
+                value: false,
                 description: 'Preserve the original transparency of textures'
             },
             sample_texture_transparency: {
@@ -151,24 +160,53 @@ function showAmbientOcclusionDialog(): void {
                 type: 'checkbox',
                 value: false,
                 description: 'Consider texture transparency when calculating occlusion (slower but more accurate)'
-            }
+            },
         },
-        onConfirm: function(formResult: any) {
-            console.log({formResult})
+        onConfirm: async function(formResult: any) {
+            const startTime = performance.now();
+            const loadingDialog = new Dialog('bake_ambient_occlusion_loading', {
+                title: 'Baking Ambient Occlusion',
+                progress_bar: {
+                    progress: 0,
+                },
+                singleButton: true,
+            });
+            
             const options: BakeAmbientOcclusionOptions = {
                 onProgress: (progress: number) => {
-                    console.log(`Baking progress: ${(progress * 100).toFixed(2)}%`);
+                    Blockbench.setProgress(progress)
+                    loadingDialog.progress_bar!.setProgress(progress);
+                    const elapsedMs = performance.now() - startTime;
+                    const dialogObject: Element = (loadingDialog as any).object;
+                    const titleElem = dialogObject.querySelector('.dialog_title');
+                    if (titleElem) {
+                        if (elapsedMs > 3000 || progress > 0.2){
+                            const estimatedTotalMs = elapsedMs / progress;
+                            const estimatedRemainingMs = estimatedTotalMs - elapsedMs;
+                            const formattedTime = formatMsToReadableTime(estimatedRemainingMs);
+                            titleElem.textContent = `Baking Ambient Occlusion (~ ${formattedTime} remaining)`;
+                        }else{
+                            titleElem.textContent = `Baking Ambient Occlusion`;
+                        }
+                    }
+
                 },
-                highlightColor: hexToColor(formResult.highlight_color.toHex(), formResult.highlight_alpha),
-                shadowColor: hexToColor(formResult.shadow_color.toHex(), formResult.shadow_alpha),
+                highlightColor: hexToColor('#'+formResult.highlight_color.toHex(), formResult.highlight_alpha),
+                shadowColor: hexToColor('#'+formResult.shadow_color.toHex(), formResult.shadow_alpha),
                 samples: formResult.samples,
+                ambientOcclusionRadius: formResult.ambient_occlusion_radius,
                 retainTextureTransparency: formResult.retain_texture_transparency,
                 sampleTextureTransparency: formResult.sample_texture_transparency,
                 shadowGamma: formResult.shadow_gamma,
                 highlightGamma: formResult.highlight_gamma
             };
-            
-            bakeAmbientOcclusion(options);
+            loadingDialog.show();
+            try{
+                await bakeAmbientOcclusion(options);
+            } finally {
+                loadingDialog.hide();
+            }
+
         }
     });
     
@@ -180,6 +218,7 @@ interface BakeAmbientOcclusionOptions {
     highlightColor: Color;
     shadowColor: Color;
     samples: number;
+    ambientOcclusionRadius: number;
     retainTextureTransparency: boolean;
     sampleTextureTransparency: boolean;
     shadowGamma: number;
@@ -236,10 +275,6 @@ async function bakeAmbientOcclusion(opts: BakeAmbientOcclusionOptions): Promise<
     } else if (anyMissing) {
         Blockbench.showToastNotification({
             text: 'Some faces are missing textures',
-        });
-    } else {
-        Blockbench.showToastNotification({
-            text: `Done! Processed ${pixelCount} pixels.`,
         });
     }
 
@@ -490,7 +525,6 @@ function calculateAmbientOcclusion(
     
     let occlusion: number = 0;
     let backfaceHits: number = 0;
-    const length: number = 8;
     const rayCount: number = opts.samples;
 
     for (let i: number = 0; i < rayCount; i++) {
@@ -507,8 +541,7 @@ function calculateAmbientOcclusion(
             (Math.random() - 0.5) * 2,
             (Math.random() - 0.5) * 2
         ).normalize();
-        const raycaster: THREE.Raycaster = new THREE.Raycaster(vectorPool.origin, vectorPool.direction, 0.001, length);
-        
+        const raycaster: THREE.Raycaster = new THREE.Raycaster(vectorPool.origin, vectorPool.direction, 0.001, opts.ambientOcclusionRadius);
         const invMat: THREE.Matrix4 =  (mesh.mesh as THREE.Mesh).matrixWorld.clone().invert();
 
         raycaster.ray.applyMatrix4( invMat );
@@ -599,4 +632,19 @@ function getHighestAndLowestY(mesh: Mesh): [number, number] {
     }
     
     return [lowestY, highestY];
+}
+
+function formatMsToReadableTime(estimatedRemainingMs: number) {
+    const totalSeconds = Math.floor(estimatedRemainingMs / 1000);
+    const totalMinutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    const minutes = totalMinutes % 60;
+    const hours = Math.floor(totalMinutes / 60);
+    if (hours > 0) {
+        return `${hours}h ${minutes}m ${seconds}s`;
+    }
+    if (minutes > 0) {
+        return `${minutes}m ${seconds}s`;
+    }
+    return `${seconds}s`;
 }
