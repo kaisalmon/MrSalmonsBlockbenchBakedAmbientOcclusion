@@ -132,13 +132,23 @@ function showAmbientOcclusionDialog(): void {
                 description: 'Gamma correction for shadow areas (higher = softer shadows)'
             },
             samples: {
-                label: 'Ray Samples',
+                label: 'Samples per pixel',
                 type: 'number',
                 min: 100,
                 max: 5000,
                 step: 100,
                 value: 1000,
-                description: 'Number of rays cast per pixel (higher = better quality, slower)'
+                description: 'Number of samples per pixel (higher = better quality, slower)'
+            },
+            sample_method: {
+                label: 'Sample Method',
+                type: 'inline_select',
+                options: {
+                    'random': 'Random',
+                    'uniform': 'Uniform',
+                },
+                value: 'random',
+                description: 'Method for sampling ambient occlusion rays. Random is slightly more accurate but noisier, uniform is smoother for less samples but is more prone to artifacts.'
             },
             ambient_occlusion_radius: {
                 label: 'Ambient Occlusion Radius',
@@ -147,7 +157,7 @@ function showAmbientOcclusionDialog(): void {
                 max: 32,
                 step: 1,
                 value: 8,
-                description: 'Radius for ambient occlusion effect (Bigger is better for larger models or higher-resolution textures'
+                description: 'Radius for ambient occlusion effect (Bigger is better for larger models or higher-resolution textures)'
             },
             simulate_ground_plane: {
                 label: 'Simulate Ground Plane',
@@ -214,7 +224,8 @@ function showAmbientOcclusionDialog(): void {
                 sampleTextureTransparency: formResult.sample_texture_transparency,
                 shadowGamma: formResult.shadow_gamma,
                 highlightGamma: formResult.highlight_gamma,
-                simulateGroundPlane: formResult.simulate_ground_plane
+                simulateGroundPlane: formResult.simulate_ground_plane,
+                sampleMethod: formResult.sample_method
             };
             loadingDialog.show();
             try{
@@ -231,6 +242,7 @@ function showAmbientOcclusionDialog(): void {
 }
 
 interface BakeAmbientOcclusionOptions {
+    sampleMethod: 'random' | 'uniform';
     onProgress?: (progress: number) => void;
     highlightColor: Color;
     shadowColor: Color;
@@ -463,7 +475,7 @@ async function processTextureWithFaces(
             
             // Get x,y,z in 3d space of the face at this u,v
             const {x, y, z} = face.UVToLocal([u + 0.5, v + 0.5]);
-            const result = calculateAmbientOcclusion([x, y, z], [u, v], face, mesh, groundPlane, bvh, faceMapping, opts);
+            const result = calculateAmbientOcclusion([x, y, z], [u, v], face, mesh, groundPlane, bvh, faceMapping, opts, generateFibonacciSpherePoints(opts.samples));
 
             if (result) {
                 const [color, backfaceRatio] = result;
@@ -542,7 +554,8 @@ function calculateAmbientOcclusion(
     groundPlane: THREE.Mesh | null,
     bvh: MeshBVH,
     faceMapping: FaceMapping,
-    opts: BakeAmbientOcclusionOptions
+    opts: BakeAmbientOcclusionOptions,
+    spherePoints: Record<number, THREE.Vector3>,
 ): [[number, number, number, number], number] | null {
     const [x, y, z]: [number, number, number] = position;
     const [normalX, normalY, normalZ]: [number, number, number] = face.getNormal(true);
@@ -555,20 +568,26 @@ function calculateAmbientOcclusion(
     const rayCount: number = opts.samples;
 
     for (let i: number = 0; i < rayCount; i++) {
-        // Reuse origin vector
+        let direction: THREE.Vector3;
         vectorPool.origin.set(x, y, z)
             .addScaledVector(vectorPool.normal, 0.5);
-        vectorPool.origin.x += (Math.random() - 0.5) * 0.5
-        vectorPool.origin.y += (Math.random() - 0.5) * 0.5;
-        vectorPool.origin.z += (Math.random() - 0.5) * 0.5;
-        
-        // Reuse direction vector
-        vectorPool.direction.set(
-            (Math.random() - 0.5) * 2,
-            (Math.random() - 0.5) * 2,
-            (Math.random() - 0.5) * 2
-        ).normalize();
-        const raycaster: THREE.Raycaster = new THREE.Raycaster(vectorPool.origin, vectorPool.direction, 0.001, opts.ambientOcclusionRadius);
+        if(opts.sampleMethod === 'random'){
+            // Reuse origin vector
+            vectorPool.origin.x += (Math.random() - 0.5) * 0.5
+            vectorPool.origin.y += (Math.random() - 0.5) * 0.5;
+            vectorPool.origin.z += (Math.random() - 0.5) * 0.5;
+            
+            // Reuse direction vector
+            vectorPool.direction.set(
+                (Math.random() - 0.5) * 2,
+                (Math.random() - 0.5) * 2,
+                (Math.random() - 0.5) * 2
+            ).normalize();
+            direction = vectorPool.direction;
+        }else{
+            direction = spherePoints[i];
+        }
+        const raycaster: THREE.Raycaster = new THREE.Raycaster(vectorPool.origin, direction, 0.001, opts.ambientOcclusionRadius);
         const invMat: THREE.Matrix4 =  (mesh.mesh as THREE.Mesh).matrixWorld.clone().invert();
 
         raycaster.ray.applyMatrix4( invMat );
@@ -674,4 +693,20 @@ function formatMsToReadableTime(estimatedRemainingMs: number) {
         return `${minutes}m ${seconds}s`;
     }
     return `${seconds}s`;
+}
+
+function generateFibonacciSpherePoints(n: number): Record<number, THREE.Vector3> {
+    const points: Record<number, THREE.Vector3> = {};
+    const phi = Math.PI * (3 - Math.sqrt(5)); // Golden angle in radians
+    for (let i = 0; i < n; i++) {
+        const y = 1 - (i / (n - 1)) * 2; // y goes from 1 to -1
+        const radius = Math.sqrt(1 - y * y); // Radius at y
+        const theta = phi * i; // Golden angle increment
+        points[i] = new THREE.Vector3(
+            radius * Math.cos(theta),
+            y,
+            radius * Math.sin(theta)
+        );
+    }
+    return points;
 }
