@@ -12,6 +12,13 @@ Generate instant shaded textures for your models, with one click! Ambient occlus
 
 To install clone the repo, and run `npm install` and then `npm build`. This will create a file at `dist\blockbench-baked-ao.js`. In Blockbench, you can then go to plugins, and select "load from file", and select the file you just created.
 
+## Using the plugin
+
+Select your mesh, and go to Tools > Bake Ambient Occlusion
+
+<img width="366" height="240" alt="image" src="https://github.com/user-attachments/assets/d43d35cb-b9e1-41ef-afa6-dbd9d960bd8e" />
+
+
 ## Settings
 <img width="491" height="691" alt="image" src="https://github.com/user-attachments/assets/ba7175f1-db3d-4819-8847-5563d741502b" />
 
