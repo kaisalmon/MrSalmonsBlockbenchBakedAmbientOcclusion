@@ -50,3 +50,11 @@ Preserve the original transparency of textures
 
 ### **Sample Texture Transparency**
 Consider texture transparency when calculating occlusion (slower but more accurate)
+
+# Credit and Acknowledgments
+
+Code by Kai Salmon.
+
+Massive performance gains were achieved by using [ThreeJS Bounding Volume Heiarachies 
+](https://github.com/gkjohnson/three-mesh-bvh) by Garrett Johnson. 
+
