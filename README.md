@@ -1,7 +1,6 @@
 # Mr Salmon's Baked Ambient Occlusion for Blockbench
 
-Generate instant shaded textures for your models, with one click! Ambient Occlusion works by working out how much light can reach each pixel on the model: Areas in crevice and divets recieve less light than those at the edge of the model.
-By exadurating this effect, you can create depth, as crevises also often pick up dirt becoming even darker, and the edges of hard objects (like rocks, wood, metal) often get work becoming even lighter.
+Generate instant shaded textures for your models, with one click! Ambient occlusion works by working out how much light can reach each pixel on the model: areas in crevices and divots receive less light than those at the edge of the model. By exaggerating this effect, you can create depth, as crevices also often pick up dirt, becoming even darker, and the edges of hard objects (like rocks, wood, metal, etc.) often get worn, becoming even lighter.
 
 *Before*
 ![](https://github.com/kaisalmon/MrsSalmonsBlockbenchBakedAmbientOcclusion/blob/main/examples/BenchFlat.gif)
