@@ -471,14 +471,25 @@ async function processTextureWithFaces(
     // Calculate ambient occlusion for all face/pixel combinations
     for (const face of faces) {
         const occupationMatrix: Record<string, Record<string, boolean>> = face.getOccupationMatrix();
-        
-        // Collect all pixel coordinates for this face
+        const texture = face.getTexture();
+        if(!texture) continue;
+        const pixelDensityU = texture.width / texture.uv_width;
+        const pixelDensityV = texture.height / texture.uv_height;
+        if(pixelDensityU !== pixelDensityV) {
+            throw new Error(`Non-uniform pixel density detected for texture ${texture.name}`);
+        }
         const pixelCoords: [number, number][] = [];
         Object.keys(occupationMatrix).forEach((uStr: string) => {
             Object.keys(occupationMatrix[uStr]).forEach((vStr: string) => {
                 const value: boolean = occupationMatrix[uStr][vStr];
+                const u = parseInt(uStr, 10);
+                const v = parseInt(vStr, 10);
                 if (value === true) {
-                    pixelCoords.push([parseInt(uStr, 10), parseInt(vStr, 10)]);
+                    for(let x = 0; x < pixelDensityU; x++) {
+                       for(let y = 0; y < pixelDensityV; y++) {
+                           pixelCoords.push([Math.floor(u * pixelDensityU + x), Math.floor(v * pixelDensityV + y)]);
+                       }
+                    }
                 }
             });
         });
@@ -489,7 +500,7 @@ async function processTextureWithFaces(
             const key: string = `${u},${v}`;
             
             // Get x,y,z in 3d space of the face at this u,v
-            const {x, y, z} = face.UVToLocal([u + 0.5, v + 0.5]);
+            let {x, y, z} = face.UVToLocal([(u + 0.5)/pixelDensityU, (v + 0.5)/pixelDensityV]);
             const result = calculateAmbientOcclusion([x, y, z], [u, v], face, mesh, groundPlane, bvh, faceMapping, opts, generateFibonacciSpherePoints(opts.samples));
 
             if (result) {
