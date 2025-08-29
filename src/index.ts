@@ -72,6 +72,20 @@ function hexToColor(hex: string, alpha: number): Color {
 }
 
 function showAmbientOcclusionDialog(): void {
+    if (Mesh.selected.length === 0) {
+        Blockbench.showToastNotification({
+            text: 'No meshes selected',
+        });
+        return;
+    }
+    if(Mesh.selected.length > 1){
+        Blockbench.showToastNotification({
+            text: 'Multiple meshes selected',
+        });
+        return;
+    }
+
+
     // Load saved settings or use defaults
     const savedSettings = getPluginSettings();
     
@@ -97,8 +111,8 @@ function showAmbientOcclusionDialog(): void {
             highlight_gamma: {
                 label: 'Highlight Gamma',
                 type: 'range',
-                min: 0.1,
-                max: 3.0,
+                min: 0.2,
+                max: 2.0,
                 step: 0.1,
                 value: savedSettings.highlightGamma,
                 description: 'Gamma correction for highlight areas (lower = more contrast)'
@@ -121,8 +135,8 @@ function showAmbientOcclusionDialog(): void {
             shadow_gamma: {
                 label: 'Shadow Gamma',
                 type: 'range',
-                min: 0.1,
-                max: 3.0,
+                min: 0.2,
+                max: 2.0,
                 step: 0.1,
                 value: savedSettings.shadowGamma,
                 description: 'Gamma correction for shadow areas (higher = softer shadows)'
@@ -274,14 +288,6 @@ interface JobController {
 }
 
 async function bakeAmbientOcclusion(opts: BakeAmbientOcclusionOptions, jobController: JobController): Promise<void> {
-
-    if (Mesh.selected.length === 0) {
-        Blockbench.showToastNotification({
-            text: 'No meshes selected',
-        });
-        return Promise.resolve();
-    }
-
     let anyMissing: boolean = false;
     let anyWithTextures: boolean = false;
     let pixelCount: number = 0;
@@ -323,11 +329,9 @@ async function bakeAmbientOcclusion(opts: BakeAmbientOcclusionOptions, jobContro
 
 }
 
-/**
- * Build a mapping from three.js face indices to Blockbench faces
- * This eliminates the need for expensive lookups during raycasting
- */
+
 function buildFaceMapping(mesh: Mesh): FaceMapping {
+    // NOTE: This code duplicates some esoteric logic in from within Blockbench
     const faceIndexToBlockbenchFace = new Map<number, MeshFace>();
     let currentFaceIndex = 0;
     
@@ -338,11 +342,9 @@ function buildFaceMapping(mesh: Mesh): FaceMapping {
         if (vertices.length < 3) continue;
         
         if (vertices.length === 3) {
-            // Triangle face uses 1 three.js face
             faceIndexToBlockbenchFace.set(currentFaceIndex, face);
             currentFaceIndex += 1;
         } else if (vertices.length === 4) {
-            // Quad face uses 2 three.js faces (triangulated)
             faceIndexToBlockbenchFace.set(currentFaceIndex, face);
             faceIndexToBlockbenchFace.set(currentFaceIndex + 1, face);
             currentFaceIndex += 2;
@@ -359,11 +361,7 @@ interface ProcessMeshFacesResult {
     totalFacesProcessed: number;
 }
 
-/**
- * Process all faces of a mesh asynchronously
- * @param mesh - The mesh to process
- * @param hasSelectedFaces - Whether the mesh has selected faces
- */
+
 async function processMeshFaces(mesh: Mesh, hasSelectedFaces: boolean, opts: BakeAmbientOcclusionOptions, jobController: JobController): Promise<ProcessMeshFacesResult> {
     let anyMissing: boolean = false;
     let anyWithTextures: boolean = false;
@@ -404,11 +402,9 @@ async function processMeshFaces(mesh: Mesh, hasSelectedFaces: boolean, opts: Bak
         maxLeafTris: 1,
     });
     
-    // Build face mapping once per mesh - this is the key optimization!
     const faceMapping = buildFaceMapping(mesh);
     
     try {
-        // Process each texture
         for (const [texture, textureFaces] of facesByTexture) {
             const { pixelsProcessed, facesProcessed } = await processTextureWithFaces(
                 texture, textureFaces, mesh, groundPlane, bvh, faceMapping, opts, jobController
@@ -440,16 +436,6 @@ function createGroundPlane(lowestY: number) {
     return groundPlane;
 }
 
-/**
- * Process all faces that use a specific texture
- * @param texture - The texture to edit
- * @param faces - All faces that use this texture
- * @param mesh - The mesh containing the faces
- * @param groundPlane - Ground plane for ambient occlusion calculations
- * @param bvh - BVH for raycasting
- * @param faceMapping - Pre-computed mapping from face indices to Blockbench faces
- * @returns Number of pixels processed
- */
 async function processTextureWithFaces(
     texture: Texture, 
     faces: MeshFace[], 
@@ -464,11 +450,9 @@ async function processTextureWithFaces(
     facesProcessed: number;
 }> {
     
-    // Track best result for each pixel
     const bestResults: Map<string, PixelResult> = new Map();
     
     let facesProcessed: number = 0;
-    // Calculate ambient occlusion for all face/pixel combinations
     for (const face of faces) {
         const occupationMatrix: Record<string, Record<string, boolean>> = face.getOccupationMatrix();
         const texture = face.getTexture();
@@ -529,7 +513,6 @@ async function processTextureWithFaces(
         opts?.onProgress?.(facesProcessed / faces.length);
     }
     
-    // Apply all results in a single edit session
     let processedPixels: number = 0;
     texture.edit((htmlCanvasElement: HTMLCanvasElement) => {
         const ctx: CanvasRenderingContext2D = htmlCanvasElement.getContext('2d')!;
@@ -561,17 +544,7 @@ const vectorPool: VectorPool = {
     normal: new THREE.Vector3()
 };
 
-/**
- * Calculates ambient occlusion at a specific point on a mesh face
- * @param position - The [x,y,z] position in 3D space
- * @param uv - The [u,v] texture coordinates
- * @param face - The face being processed
- * @param mesh - The mesh containing the face
- * @param groundPlane - Ground plane for occlusion calculations
- * @param bvh - BVH for raycasting
- * @param faceMapping - Pre-computed mapping from face indices to Blockbench faces
- * @returns [RGBA values, backface ratio] for the ambient occlusion, or null if backface ratio > 25%
- */
+
 function calculateAmbientOcclusion(
     position: [number, number, number], 
     uv: [number, number], 
@@ -586,7 +559,6 @@ function calculateAmbientOcclusion(
     const [x, y, z]: [number, number, number] = position;
     const [normalX, normalY, normalZ]: [number, number, number] = face.getNormal(true);
     
-    // Reuse pooled vectors
     vectorPool.normal.set(normalX, normalY, normalZ);
     
     let occlusion: number = 0;
@@ -598,11 +570,9 @@ function calculateAmbientOcclusion(
         vectorPool.origin.set(x, y, z)
             .addScaledVector(vectorPool.normal, 0.5);
         if(opts.sampleMethod === 'random'){
-            // Reuse origin vector
             vectorPool.origin.x += (Math.random() - 0.5) * 0.5
             vectorPool.origin.y += (Math.random() - 0.5) * 0.5;
             vectorPool.origin.z += (Math.random() - 0.5) * 0.5;
-            // Reuse direction vector
             vectorPool.direction.set(
                 (Math.random() - 0.5) * 2,
                 (Math.random() - 0.5) * 2,
@@ -613,9 +583,7 @@ function calculateAmbientOcclusion(
             direction = spherePoints[i];
         }
         const raycaster: THREE.Raycaster = new THREE.Raycaster(vectorPool.origin, direction, 0.001, opts.ambientOcclusionRadius);
-        // const invMat: THREE.Matrix4 =  (mesh.mesh as THREE.Mesh).matrixWorld.clone().invert();
 
-        // raycaster.ray.applyMatrix4( invMat );
         const hit = bvh.raycastFirst( raycaster.ray, THREE.DoubleSide );
         if (hit) {
             const faceNormal = hit.face!.normal!;
