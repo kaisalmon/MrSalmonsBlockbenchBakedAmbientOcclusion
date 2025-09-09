@@ -1,67 +1,133 @@
-# Mr Salmon's Baked Ambient Occlusion for Blockbench
+# Blockbench Baked Ambient Occlusion (AO) Plugin
 
-Generate instant shaded textures for your models, with one click! Ambient occlusion works by working out how much light can reach each pixel on the model: areas in crevices and divots receive less light than those at the edge of the model. By exaggerating this effect, you can create depth, as crevices also often pick up dirt, becoming even darker, and the edges of hard objects (like rocks, wood, metal, etc.) often get worn, becoming even lighter.
+Generate instant shaded textures for your models with one click!
 
-*Before*
+This plugin bakes **ambient occlusion (AO)** directly onto your mesh textures by calculating how much ambient light can reach each pixel. AO simulates how light is blocked in crevices and corners, creating natural depth, shadowing, and worn edge effects.  
+
+By exaggerating this shading, you can replicate how dirt accumulates in recessed areas and how edges of materials like rocks, wood, and metal become worn and lightened over time.
+
+*Before*  
 ![](https://github.com/kaisalmon/MrsSalmonsBlockbenchBakedAmbientOcclusion/blob/main/examples/BenchFlat.gif)
 
-*After*
+*After*  
 ![](https://github.com/kaisalmon/MrsSalmonsBlockbenchBakedAmbientOcclusion/blob/main/examples/Bench.gif)
 
-## Building and installing.
+## How Ambient Occlusion Works
 
-To install clone the repo, and run `npm install` and then `npm build`. This will create a file at `dist\blockbench-baked-ao.js`. In Blockbench, you can then go to plugins, and select "load from file", and select the file you just created.
+AO works by casting rays from each pixel on your model’s surface to determine how much ambient light reaches that point:
 
-## Using the plugin
+* **Occluded areas** (crevices, corners, recesses) receive less light → appear darker.
+* **Exposed edges** (sharp corners, outward faces) receive more light → appear brighter.
 
-Select your mesh, and go to Tools > Bake Ambient Occlusion
-
-<img width="366" height="240" alt="image" src="https://github.com/user-attachments/assets/d43d35cb-b9e1-41ef-afa6-dbd9d960bd8e" />
+This effect creates realistic depth and helps your model feel more grounded in its environment.
 
 
-## Settings
-<img width="491" height="691" alt="image" src="https://github.com/user-attachments/assets/ba7175f1-db3d-4819-8847-5563d741502b" />
+## Installation
 
-### **Highlight Color**
-Color used for areas with high ambient lighting
+1. Clone the repository.  
+2. Run:
+   
+```bash
+npm install
+npm build
+```
 
-### **Highlight Opacity** 
-Opacity of the highlight color overlay
+This will create a file at `dist\blockbench-baked-ao.js`.
 
-### **Highlight Gamma**
-Gamma correction for highlight areas (lower = more contrast)
+3. In **Blockbench**, go to **Plugins > Load from file** and select the built file.
 
-### **Shadow Color**
-Color used for occluded/shadowed areas
 
-### **Shadow Opacity**
-Opacity of the shadow color overlay
+## Usage
 
-### **Shadow Gamma**
-Gamma correction for shadow areas (higher = softer shadows)
+1. Select your mesh (only one mesh at a time is supported).
+2. Go to **Tools > Bake Ambient Occlusion**.
+3. Adjust your settings in the dialog.
+4. Click **Confirm** to bake the effect.
 
-### **Samples per pixel**
-Number of samples per pixel (higher = better quality, slower). 100 recommended for uniform sampling, 1000 for random sampling.
+<img width="366" height="240" alt="Usage screenshot" src="https://github.com/user-attachments/assets/d43d35cb-b9e1-41ef-afa6-dbd9d960bd8e" />
 
-### **Sample Method**
-Method for sampling ambient occlusion rays. Random is slightly more accurate but noisier, uniform is smoother for less samples but is more prone to artifacts.
 
-### **Ambient Occlusion Radius**
-Radius for ambient occlusion effect (Bigger is better for larger models or higher-resolution textures)
+## Settings Reference
 
-### **Simulate Ground Plane**
-Simulate a ground plane, adding shadows at the base of the model
+<img width="491" height="691" alt="Settings screenshot" src="https://github.com/user-attachments/assets/ba7175f1-db3d-4819-8847-5563d741502b" />
 
-### **Retain Texture Transparency**
-Preserve the original transparency of textures
+### Colors and Opacity
 
-### **Sample Texture Transparency**
-Consider texture transparency when calculating occlusion (slower but more accurate)
+* **Highlight Color & Opacity**
+  Defines the color and transparency for well-lit, exposed areas (worn edges, surfaces in full light).
 
-# Credit and Acknowledgments
+* **Shadow Color & Opacity**
+  Defines the color and transparency for occluded, shadowed areas (crevices, corners, dirt-prone areas).
 
-Code by Kai Salmon.
+![Color Settings](settings_reference_guides/colors.gif)
+![AO Strength](settings_reference_guides/ao_strength.gif)
 
-Massive performance gains were achieved by using [ThreeJS Bounding Volume Heiarachies 
-](https://github.com/gkjohnson/three-mesh-bvh) by Garrett Johnson. 
+### Gamma Correction
 
+* **Highlight Gamma**
+  Controls highlight contrast. Lower = sharper transitions, more contrast. Higher = softer highlights.
+
+* **Shadow Gamma**
+  Controls shadow contrast. Higher = softer, more subtle shadows. Lower = sharper, harder shadows.
+
+![Gamma Settings](settings_reference_guides/gamma.gif)
+
+
+### AO Strength and Quality
+
+* **Samples per Pixel**
+  Determines AO accuracy.
+
+  * 100–500 samples: Quick previews (uniform sampling).
+  * 1000+: Final quality (random sampling).
+
+* **Sample Method**
+
+  * **Random**: More accurate, slightly noisier with fewer samples.
+  * **Uniform**: Smooth with fewer samples, but may show artifacts.
+
+![Sample Settings](settings_reference_guides/sampling.gif)
+
+### Occlusion Radius
+
+* **Ambient Occlusion Radius (Pixels)**
+  Controls how far shadows extend:
+
+  * Small radius → tight, localized shadows.
+  * Large radius → broader, more distant shadows.
+    Use higher values for large models or high-resolution textures.
+
+![Radius Settings](settings_reference_guides/radius.gif)
+
+
+### Ground Plane Simulation
+
+* **Simulate Ground Plane**
+  Adds contact shadows beneath your model for a grounded look.
+
+![Ground Plane](settings_reference_guides/ground_plane.gif)
+
+
+### Transparency Handling
+
+* **Retain Texture Transparency**
+  Preserves your texture’s alpha channel.
+
+* **Sample Texture Transparency**
+  Considers semi-transparent pixels when casting rays. More realistic but slower.
+
+![Transparency Settings](settings_reference_guides/transparency.gif)
+
+
+## Usage Tips
+
+* **Quick previews**: 100–200 samples, uniform sampling.
+* **Final results**: 1000+ samples, random sampling.
+* **Large models**: Increase AO radius (12–16 recommended).
+* **Detailed textures**: High sample counts + enable texture transparency sampling.
+  
+## Credit and Acknowledgments
+
+Plugin by **Kai Salmon**.
+
+Massive performance gains powered by [ThreeJS Bounding Volume Hierarchies (BVH)](https://github.com/gkjohnson/three-mesh-bvh) by Garrett Johnson.
