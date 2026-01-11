@@ -28,11 +28,11 @@ interface FaceMapping {
 
 let button: Action;
 
-(Plugin as any).register('blockbench-baked-ao', {
-    title: 'Blockbench Baked AO',
+(Plugin as any).register('baked_ambient_occlusion', {
+    title: 'Mr Salmon\'s Baked Ambient Occlusion',
     author: 'Kai Salmon',
     icon: 'icon',
-    description: 'Baked Ambient Occlusion for Blockbench',
+    description: 'Baked Ambient Occlusion, creating instant shading',
     version: '1.0.0',
     variant: 'both',
     onload(): void {

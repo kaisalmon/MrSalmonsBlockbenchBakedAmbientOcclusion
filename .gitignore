@@ -1,2 +1,3 @@
 node_modules/
 dist/
+baked_ambient_occlusion.js

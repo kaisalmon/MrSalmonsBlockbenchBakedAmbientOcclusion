@@ -17,7 +17,6 @@
     "webpack-cli": "^5.1.4"
   },
   "dependencies": {
-    "three": "^0.160.0",
     "three-mesh-bvh": "^0.9.1"
   }
 }

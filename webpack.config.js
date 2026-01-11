@@ -15,7 +15,7 @@ module.exports = {
     extensions: ['.tsx', '.ts', '.js'],
   },
   output: {
-    filename: 'blockbench-baked-ao.js',
+    filename: 'baked_ambient_occlusion.js',
     path: path.resolve(__dirname, 'dist'),
     library: {
       type: 'umd',
