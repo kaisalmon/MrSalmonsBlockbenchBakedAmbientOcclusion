@@ -4,9 +4,7 @@
   "description": "Baked Ambient Occlusion for Blockbench",
   "main": "dist/index.js",
   "scripts": {
-    "build": "webpack --mode production",
-    "dev": "webpack --mode development",
-    "watch": "webpack --mode development --watch"
+    "build": "webpack --mode production"
   },
   "devDependencies": {
     "@types/three": "^0.160.0",
